@@ -225,9 +225,11 @@
     let device;
     let context;
     let pipeline;
-    let uniformBuffer;
+    let contourUniformBuffer;
+    let gridUniformBuffer;
     let segmentBuffer;
-    let bindGroup;
+    let contourBindGroup;
+    let gridBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
     let width = 1;
@@ -244,6 +246,7 @@ struct Uniforms {
   resolution: vec2f,
   thickness: f32,
   _pad: f32,
+  color: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -282,8 +285,8 @@ fn vs(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instance
 fn fs(in: VertexOut) -> @location(0) vec4f {
   let core = 1.0 - smoothstep(0.72, 1.0, abs(in.local.y));
   let glow = 1.0 - smoothstep(0.95, 1.65, abs(in.local.y));
-  let color = mix(vec3f(0.20, 0.72, 0.95), vec3f(0.33, 1.0, 0.70), core);
-  return vec4f(color, max(core, glow * 0.45));
+  let tint = mix(uniforms.color.rgb * 0.82, uniforms.color.rgb, core);
+  return vec4f(tint, uniforms.color.a * max(core, glow * 0.45));
 }`;
 
     function updateOutputs() {
@@ -400,6 +403,23 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       return new Float32Array(segments);
     }
 
+    function buildGridSegments() {
+      const cell = Number(cellEl.value) * dpr;
+      const segments = [];
+
+      for (let x = 0; x <= width + 0.5; x += cell) {
+        const gx = Math.min(width, x);
+        segments.push(gx, 0, gx, height);
+      }
+
+      for (let y = 0; y <= height + 0.5; y += cell) {
+        const gy = Math.min(height, y);
+        segments.push(0, gy, width, gy);
+      }
+
+      return new Float32Array(segments);
+    }
+
     function ensureSegmentBuffer(floatCount) {
       if (segmentBuffer && floatCount <= segmentCapacity) return;
       segmentCapacity = Math.max(floatCount, 1024);
@@ -408,10 +428,17 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         size: segmentCapacity * Float32Array.BYTES_PER_ELEMENT,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
-      bindGroup = device.createBindGroup({
+      gridBindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
-          { binding: 0, resource: { buffer: uniformBuffer } },
+          { binding: 0, resource: { buffer: gridUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      contourBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: contourUniformBuffer } },
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
@@ -423,14 +450,20 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       lastTime = now;
       if (!paused) phase += dt;
 
+      const gridSegments = buildGridSegments();
       const segments = buildSegments(phase);
-      ensureSegmentBuffer(Math.max(4, segments.length));
-      if (segments.length > 0) {
-        device.queue.writeBuffer(segmentBuffer, 0, segments);
+      const combinedSegments = new Float32Array(gridSegments.length + segments.length);
+      combinedSegments.set(gridSegments);
+      combinedSegments.set(segments, gridSegments.length);
+      ensureSegmentBuffer(Math.max(4, combinedSegments.length));
+      if (combinedSegments.length > 0) {
+        device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
       }
 
-      const uniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0]);
-      device.queue.writeBuffer(uniformBuffer, 0, uniformData);
+      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
+      const contourUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
+      device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
+      device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
@@ -442,8 +475,10 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         }],
       });
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, bindGroup);
-      pass.draw(6, segments.length / 4);
+      pass.setBindGroup(0, gridBindGroup);
+      pass.draw(6, gridSegments.length / 4);
+      pass.setBindGroup(0, contourBindGroup);
+      pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
       pass.end();
       device.queue.submit([encoder.finish()]);
 
@@ -479,8 +514,12 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         alphaMode: "opaque",
       });
 
-      uniformBuffer = device.createBuffer({
-        size: 16,
+      gridUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      contourUniformBuffer = device.createBuffer({
+        size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
 
