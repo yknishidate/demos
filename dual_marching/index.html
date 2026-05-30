@@ -296,14 +296,18 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
     }
 
     function shuffleBlobs() {
+      const shapes = ["circle", "square", "diamond", "block"];
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.11 + Math.random() * 0.11,
+        radius: 0.09 + Math.random() * 0.12,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
         drift: 0.08 + Math.random() * 0.16,
-        weight: i % 3 === 0 ? 1.2 : 1.0,
+        rotation: Math.random() * Math.PI,
+        aspect: 0.65 + Math.random() * 0.9,
+        shape: shapes[i % shapes.length],
+        weight: i % 3 === 0 ? 1.35 : 1.0,
       }));
     }
 
@@ -318,6 +322,21 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       }
     }
 
+    function shapeMetric(blob, dx, dy, t) {
+      const turn = blob.rotation + Math.sin(t * blob.speed * 0.7 + blob.angle) * 0.45;
+      const c = Math.cos(turn);
+      const s = Math.sin(turn);
+      const rx = (dx * c - dy * s) / blob.radius;
+      const ry = (dx * s + dy * c) / (blob.radius * blob.aspect);
+      const ax = Math.abs(rx);
+      const ay = Math.abs(ry);
+
+      if (blob.shape === "square") return Math.max(ax, ay);
+      if (blob.shape === "diamond") return ax + ay;
+      if (blob.shape === "block") return Math.max(ax / 1.45, ay / 0.58);
+      return Math.hypot(rx, ry);
+    }
+
     function sampleField(x, y, t) {
       const nx = x / width;
       const ny = y / height;
@@ -328,8 +347,9 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         const by = blob.y + Math.sin(t * blob.speed * 0.83 + blob.angle * 1.7) * blob.drift;
         const dx = nx - bx;
         const dy = ny - by;
-        const r2 = blob.radius * blob.radius;
-        v += blob.weight * r2 / (dx * dx + dy * dy + 0.0008);
+        const metric = shapeMetric(blob, dx, dy, t);
+        const core = Math.max(0, 1 - metric);
+        v += blob.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
       }
 
       if (pointer.active) {
@@ -339,7 +359,7 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       }
 
       const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
-      return v * 0.055 + ripple;
+      return v * 0.18 + ripple;
     }
 
     function interpolate(p0, p1, v0, v1, iso) {
