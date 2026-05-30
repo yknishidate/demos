@@ -188,6 +188,28 @@
       line-height: 1.45;
     }
 
+    .repo-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 8px;
+      color: rgba(170, 180, 192, 0.78);
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    .repo-link:hover {
+      color: var(--text);
+      text-decoration: underline;
+    }
+
+    .external-mark {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      opacity: 0.82;
+    }
+
     .error {
       color: var(--danger);
     }
@@ -256,6 +278,12 @@
     </div>
 
     <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: Dual Marching. Move the pointer to pull one source through the scalar field.</p>
+    <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
+      <span>github.com/yknishidate/demos</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
   </section>
 
   <script type="module">
