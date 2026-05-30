@@ -69,7 +69,7 @@
     }
 
     .status {
-      min-width: 82px;
+      min-width: 116px;
       color: var(--accent);
       font-size: 12px;
       text-align: right;
@@ -187,7 +187,7 @@
       </div>
     </div>
 
-    <p class="note" id="note">Move the pointer to pull one source through the scalar field.</p>
+    <p class="note" id="note">Green is Marching Squares; amber is Dual Contouring. Move the pointer to pull one source through the scalar field.</p>
   </section>
 
   <script type="module">
@@ -226,9 +226,11 @@
     let context;
     let pipeline;
     let contourUniformBuffer;
+    let dualUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
     let contourBindGroup;
+    let dualBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
@@ -378,7 +380,62 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       return interpolate(p[0], p[3], v[0], v[3], iso);
     }
 
-    function buildSegments(t) {
+    function estimateNormal(x, y, t) {
+      const h = Math.max(1.5, Number(cellEl.value) * dpr * 0.12);
+      const x0 = Math.max(0, x - h);
+      const x1 = Math.min(width, x + h);
+      const y0 = Math.max(0, y - h);
+      const y1 = Math.min(height, y + h);
+      const gx = sampleField(x1, y, t) - sampleField(x0, y, t);
+      const gy = sampleField(x, y1, t) - sampleField(x, y0, t);
+      const len = Math.hypot(gx, gy);
+      return len > 0.000001 ? [gx / len, gy / len] : [1, 0];
+    }
+
+    function solveQef(samples, bounds) {
+      let ata00 = 0;
+      let ata01 = 0;
+      let ata11 = 0;
+      let atb0 = 0;
+      let atb1 = 0;
+      let cx = 0;
+      let cy = 0;
+
+      for (const sample of samples) {
+        const [px, py, nx, ny] = sample;
+        const b = nx * px + ny * py;
+        ata00 += nx * nx;
+        ata01 += nx * ny;
+        ata11 += ny * ny;
+        atb0 += nx * b;
+        atb1 += ny * b;
+        cx += px;
+        cy += py;
+      }
+
+      cx /= samples.length;
+      cy /= samples.length;
+      const det = ata00 * ata11 - ata01 * ata01;
+      let x = cx;
+      let y = cy;
+
+      if (Math.abs(det) > 0.000001) {
+        x = (atb0 * ata11 - atb1 * ata01) / det;
+        y = (ata00 * atb1 - ata01 * atb0) / det;
+      }
+
+      if (x < bounds.x0 || x > bounds.x1 || y < bounds.y0 || y > bounds.y1) {
+        x = cx;
+        y = cy;
+      }
+
+      return [
+        Math.min(bounds.x1, Math.max(bounds.x0, x)),
+        Math.min(bounds.y1, Math.max(bounds.y0, y)),
+      ];
+    }
+
+    function buildFieldGrid(t) {
       const cell = Number(cellEl.value) * dpr;
       const iso = Number(isoEl.value);
       const cols = Math.ceil(width / cell);
@@ -391,6 +448,11 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         }
       }
 
+      return { cell, iso, cols, rows, values };
+    }
+
+    function buildMarchingSegments(field) {
+      const { cell, iso, cols, rows, values } = field;
       const segments = [];
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
@@ -416,6 +478,85 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
             if (dx * dx + dy * dy > 0.01) {
               segments.push(a[0], a[1], b[0], b[1]);
             }
+          }
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function buildDualSegments(field, t) {
+      const { cell, iso, cols, rows, values } = field;
+      const vertices = new Float32Array(cols * rows * 2);
+      const valid = new Uint8Array(cols * rows);
+      const segments = [];
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const v = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+          const mask = (v[0] > iso ? 8 : 0) | (v[1] > iso ? 4 : 0) | (v[2] > iso ? 2 : 0) | (v[3] > iso ? 1 : 0);
+          if (mask === 0 || mask === 15) continue;
+
+          const samples = [];
+          for (let edge = 0; edge < 4; edge++) {
+            const a = [0, 1, 3, 0][edge];
+            const b = [1, 2, 2, 3][edge];
+            if ((v[a] > iso) === (v[b] > iso)) continue;
+            const crossing = edgePoint(edge, p, v, iso);
+            const normal = estimateNormal(crossing[0], crossing[1], t);
+            samples.push([crossing[0], crossing[1], normal[0], normal[1]]);
+          }
+          if (samples.length === 0) continue;
+
+          const qefPoint = solveQef(samples, { x0, y0, x1, y1 });
+
+          const index = y * cols + x;
+          vertices[index * 2] = qefPoint[0];
+          vertices[index * 2 + 1] = qefPoint[1];
+          valid[index] = 1;
+        }
+      }
+
+      function pushConnection(a, b) {
+        if (!valid[a] || !valid[b]) return;
+        const ax = vertices[a * 2];
+        const ay = vertices[a * 2 + 1];
+        const bx = vertices[b * 2];
+        const by = vertices[b * 2 + 1];
+        const dx = ax - bx;
+        const dy = ay - by;
+        if (dx * dx + dy * dy > 0.01) {
+          segments.push(ax, ay, bx, by);
+        }
+      }
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 1; x < cols; x++) {
+          const top = y * (cols + 1) + x;
+          const bottom = (y + 1) * (cols + 1) + x;
+          if ((values[top] > iso) !== (values[bottom] > iso)) {
+            pushConnection(y * cols + x - 1, y * cols + x);
+          }
+        }
+      }
+
+      for (let y = 1; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const left = y * (cols + 1) + x;
+          const right = left + 1;
+          if ((values[left] > iso) !== (values[right] > iso)) {
+            pushConnection((y - 1) * cols + x, y * cols + x);
           }
         }
       }
@@ -462,6 +603,13 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      dualBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: dualUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -471,10 +619,13 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       if (!paused) phase += dt;
 
       const gridSegments = buildGridSegments();
-      const segments = buildSegments(phase);
-      const combinedSegments = new Float32Array(gridSegments.length + segments.length);
+      const field = buildFieldGrid(phase);
+      const segments = buildMarchingSegments(field);
+      const dualSegments = buildDualSegments(field, phase);
+      const combinedSegments = new Float32Array(gridSegments.length + segments.length + dualSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
+      combinedSegments.set(dualSegments, gridSegments.length + segments.length);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
         device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
@@ -482,8 +633,10 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
 
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
       const contourUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
+      const dualUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.9]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
+      device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
@@ -499,10 +652,12 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       pass.draw(6, gridSegments.length / 4);
       pass.setBindGroup(0, contourBindGroup);
       pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
+      pass.setBindGroup(0, dualBindGroup);
+      pass.draw(6, dualSegments.length / 4, 0, (gridSegments.length + segments.length) / 4);
       pass.end();
       device.queue.submit([encoder.finish()]);
 
-      statusEl.textContent = `${segments.length / 4 | 0} segments`;
+      statusEl.textContent = `${segments.length / 4 | 0} ms / ${dualSegments.length / 4 | 0} dc`;
       requestAnimationFrame(render);
     }
 
@@ -539,6 +694,10 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       contourUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      dualUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
