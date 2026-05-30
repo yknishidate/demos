@@ -69,7 +69,7 @@
     }
 
     .status {
-      min-width: 116px;
+      min-width: 172px;
       color: var(--accent);
       font-size: 12px;
       text-align: right;
@@ -128,6 +128,59 @@
       background: rgba(66, 216, 180, 0.12);
     }
 
+    .toggle-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 30px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toggle-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      border-radius: 3px;
+    }
+
+    .swatch-ms {
+      color: rgb(84, 255, 179);
+      background: currentColor;
+    }
+
+    .swatch-dc {
+      color: rgb(255, 199, 66);
+      background: currentColor;
+    }
+
+    .swatch-dm {
+      color: rgb(184, 158, 255);
+      background: currentColor;
+    }
+
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
     .note {
       margin: 12px 0 0;
       color: var(--muted);
@@ -152,7 +205,7 @@
 
   <section class="hud" aria-label="Marching squares controls">
     <div class="title-row">
-      <h1>WebGPU Marching Squares</h1>
+      <h1>Dual Marching</h1>
       <div class="status" id="status">starting</div>
     </div>
 
@@ -170,7 +223,7 @@
           <span>Cell size</span>
           <output id="cellOut">12 px</output>
         </span>
-        <input id="cell" type="range" min="5" max="28" step="1" value="12" />
+        <input id="cell" type="range" min="5" max="36" step="1" value="12" />
       </label>
 
       <label>
@@ -185,9 +238,24 @@
         <button id="pause" type="button">Pause</button>
         <button id="shuffle" type="button">Shuffle field</button>
       </div>
+
+      <div class="toggle-row" aria-label="Display toggles">
+        <label class="toggle" for="showMarching">
+          <span class="toggle-name"><span class="swatch swatch-ms" aria-hidden="true"></span>Marching Squares</span>
+          <input id="showMarching" type="checkbox" checked />
+        </label>
+        <label class="toggle" for="showContouring">
+          <span class="toggle-name"><span class="swatch swatch-dc" aria-hidden="true"></span>Dual Contouring</span>
+          <input id="showContouring" type="checkbox" checked />
+        </label>
+        <label class="toggle" for="showDualMarching">
+          <span class="toggle-name"><span class="swatch swatch-dm" aria-hidden="true"></span>Dual Marching</span>
+          <input id="showDualMarching" type="checkbox" checked />
+        </label>
+      </div>
     </div>
 
-    <p class="note" id="note">Green is Marching Squares; amber is Dual Contouring. Move the pointer to pull one source through the scalar field.</p>
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: Dual Marching. Move the pointer to pull one source through the scalar field.</p>
   </section>
 
   <script type="module">
@@ -202,6 +270,9 @@
     const widthOut = document.querySelector("#widthOut");
     const pauseButton = document.querySelector("#pause");
     const shuffleButton = document.querySelector("#shuffle");
+    const showMarchingEl = document.querySelector("#showMarching");
+    const showContouringEl = document.querySelector("#showContouring");
+    const showDualMarchingEl = document.querySelector("#showDualMarching");
 
     const edgePairs = [
       [],
@@ -227,10 +298,12 @@
     let pipeline;
     let contourUniformBuffer;
     let dualUniformBuffer;
+    let dualMarchingUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
     let contourBindGroup;
     let dualBindGroup;
+    let dualMarchingBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
@@ -242,6 +315,11 @@
     let lastTime = performance.now();
     let pointer = { x: 0.5, y: 0.5, active: false };
     let blobs = [];
+    const visible = {
+      marching: true,
+      contouring: true,
+      dualMarching: true,
+    };
 
     const shaderCode = `
 struct Uniforms {
@@ -297,8 +375,14 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       widthOut.value = `${Number(widthEl.value).toFixed(1)} px`;
     }
 
+    function syncToggles() {
+      showMarchingEl.checked = visible.marching;
+      showContouringEl.checked = visible.contouring;
+      showDualMarchingEl.checked = visible.dualMarching;
+    }
+
     function shuffleBlobs() {
-      const shapes = ["circle", "square", "diamond", "block"];
+      const shapes = ["square"];
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
@@ -325,11 +409,14 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
     }
 
     function shapeMetric(blob, dx, dy, t) {
+      const canvasAspect = width / height;
+      const sx = dx * canvasAspect;
+      const sy = dy;
       const turn = blob.rotation + Math.sin(t * blob.speed * 0.7 + blob.angle) * 0.45;
       const c = Math.cos(turn);
       const s = Math.sin(turn);
-      const rx = (dx * c - dy * s) / blob.radius;
-      const ry = (dx * s + dy * c) / (blob.radius * blob.aspect);
+      const rx = (sx * c - sy * s) / blob.radius;
+      const ry = (sx * s + sy * c) / (blob.radius * blob.aspect);
       const ax = Math.abs(rx);
       const ay = Math.abs(ry);
 
@@ -357,7 +444,9 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       if (pointer.active) {
         const dx = nx - pointer.x;
         const dy = ny - pointer.y;
-        v += 0.024 / (dx * dx + dy * dy + 0.0007);
+        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
+        const pointerCore = Math.max(0, 1 - pointerMetric);
+        v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }
 
       const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
@@ -564,6 +653,67 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       return new Float32Array(segments);
     }
 
+    function gridEdgeKey(cellX, cellY, edge) {
+      if (edge === 0) return `h:${cellY}:${cellX}`;
+      if (edge === 1) return `v:${cellY}:${cellX + 1}`;
+      if (edge === 2) return `h:${cellY + 1}:${cellX}`;
+      return `v:${cellY}:${cellX}`;
+    }
+
+    function buildDualMarchingSegments(field, t) {
+      const { cell, iso, cols, rows, values } = field;
+      const endpointOwner = new Map();
+      const segments = [];
+
+      function connectOrStore(key, point) {
+        const previous = endpointOwner.get(key);
+        if (!previous) {
+          endpointOwner.set(key, point);
+          return;
+        }
+
+        const dx = previous[0] - point[0];
+        const dy = previous[1] - point[1];
+        if (dx * dx + dy * dy > 0.01) {
+          segments.push(previous[0], previous[1], point[0], point[1]);
+        }
+      }
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const v = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+          const mask = (v[0] > iso ? 8 : 0) | (v[1] > iso ? 4 : 0) | (v[2] > iso ? 2 : 0) | (v[3] > iso ? 1 : 0);
+
+          for (const pair of edgePairs[mask]) {
+            const a = edgePoint(pair[0], p, v, iso);
+            const b = edgePoint(pair[1], p, v, iso);
+            const an = estimateNormal(a[0], a[1], t);
+            const bn = estimateNormal(b[0], b[1], t);
+            const qefPoint = solveQef([
+              [a[0], a[1], an[0], an[1]],
+              [b[0], b[1], bn[0], bn[1]],
+            ], { x0, y0, x1, y1 });
+
+            connectOrStore(gridEdgeKey(x, y, pair[0]), qefPoint);
+            connectOrStore(gridEdgeKey(x, y, pair[1]), qefPoint);
+          }
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
     function buildGridSegments() {
       const cell = Number(cellEl.value) * dpr;
       const segments = [];
@@ -610,6 +760,13 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      dualMarchingBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: dualMarchingUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -620,12 +777,14 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
 
       const gridSegments = buildGridSegments();
       const field = buildFieldGrid(phase);
-      const segments = buildMarchingSegments(field);
-      const dualSegments = buildDualSegments(field, phase);
-      const combinedSegments = new Float32Array(gridSegments.length + segments.length + dualSegments.length);
+      const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
+      const dualSegments = visible.contouring ? buildDualSegments(field, phase) : new Float32Array();
+      const dualMarchingSegments = visible.dualMarching ? buildDualMarchingSegments(field, phase) : new Float32Array();
+      const combinedSegments = new Float32Array(gridSegments.length + segments.length + dualSegments.length + dualMarchingSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
       combinedSegments.set(dualSegments, gridSegments.length + segments.length);
+      combinedSegments.set(dualMarchingSegments, gridSegments.length + segments.length + dualSegments.length);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
         device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
@@ -634,9 +793,11 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
       const contourUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
       const dualUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.9]);
+      const dualMarchingUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.56), 0, 0.72, 0.62, 1.0, 0.9]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
       device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
+      device.queue.writeBuffer(dualMarchingUniformBuffer, 0, dualMarchingUniformData);
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
@@ -650,19 +811,31 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, gridBindGroup);
       pass.draw(6, gridSegments.length / 4);
-      pass.setBindGroup(0, contourBindGroup);
-      pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
-      pass.setBindGroup(0, dualBindGroup);
-      pass.draw(6, dualSegments.length / 4, 0, (gridSegments.length + segments.length) / 4);
+      if (visible.marching) {
+        pass.setBindGroup(0, contourBindGroup);
+        pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
+      }
+      if (visible.contouring) {
+        pass.setBindGroup(0, dualBindGroup);
+        pass.draw(6, dualSegments.length / 4, 0, (gridSegments.length + segments.length) / 4);
+      }
+      if (visible.dualMarching) {
+        pass.setBindGroup(0, dualMarchingBindGroup);
+        pass.draw(6, dualMarchingSegments.length / 4, 0, (gridSegments.length + segments.length + dualSegments.length) / 4);
+      }
       pass.end();
       device.queue.submit([encoder.finish()]);
 
-      statusEl.textContent = `${segments.length / 4 | 0} ms / ${dualSegments.length / 4 | 0} dc`;
+      const msLabel = visible.marching ? `${segments.length / 4 | 0} ms` : "ms off";
+      const dcLabel = visible.contouring ? `${dualSegments.length / 4 | 0} dc` : "dc off";
+      const dmLabel = visible.dualMarching ? `${dualMarchingSegments.length / 4 | 0} dm` : "dm off";
+      statusEl.textContent = `${msLabel} / ${dcLabel} / ${dmLabel}`;
       requestAnimationFrame(render);
     }
 
     async function init() {
       updateOutputs();
+      syncToggles();
       shuffleBlobs();
 
       if (!navigator.gpu) {
@@ -701,6 +874,10 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      dualMarchingUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
 
       const shaderModule = device.createShaderModule({ code: shaderCode });
       pipeline = device.createRenderPipeline({
@@ -733,12 +910,32 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       input.addEventListener("input", updateOutputs);
     }
 
+    showMarchingEl.addEventListener("change", () => {
+      visible.marching = showMarchingEl.checked;
+    });
+
+    showContouringEl.addEventListener("change", () => {
+      visible.contouring = showContouringEl.checked;
+    });
+
+    showDualMarchingEl.addEventListener("change", () => {
+      visible.dualMarching = showDualMarchingEl.checked;
+    });
+
     pauseButton.addEventListener("click", () => {
       paused = !paused;
       pauseButton.textContent = paused ? "Resume" : "Pause";
     });
 
     shuffleButton.addEventListener("click", shuffleBlobs);
+
+    window.addEventListener("keydown", (event) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
+      if (event.key === "1") visible.marching = !visible.marching;
+      if (event.key === "2") visible.contouring = !visible.contouring;
+      if (event.key === "3") visible.dualMarching = !visible.dualMarching;
+      syncToggles();
+    });
 
     canvas.addEventListener("pointermove", (event) => {
       const rect = canvas.getBoundingClientRect();
