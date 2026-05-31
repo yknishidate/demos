@@ -1155,6 +1155,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const vertexDamping = 0.46;
       const maxVertexMove = cell * 0.28;
       const outerIterations = Number(iterationsEl.value);
+      const innerIterations = 12;
+      const solveThreshold = 0.03 * dpr;
 
       function gatherCellSamples(cellInfo) {
         const samples = [];
@@ -1240,65 +1242,71 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         const sampleAssignments = assignSamplesToCells();
         for (const cellInfo of cells) {
           if (!cellInfo) continue;
-          const constraints = [];
+          let current = cellInfo.v;
 
-          for (const edgeIndex of cellInfo.hermites) {
-            const hermite = edges[edgeIndex];
-            constraints.push({
-              nx: hermite.n.x,
-              ny: hermite.n.y,
-              b: hermite.n.x * hermite.p.x + hermite.n.y * hermite.p.y,
-              w: hermiteWeight,
-            });
-          }
+          for (let inner = 0; inner < innerIterations; inner++) {
+            const constraints = [];
 
-          for (const sample of sampleAssignments[cellInfo.index]) {
-            const samplePoint = { x: sample.x, y: sample.y };
-            let best = null;
             for (const edgeIndex of cellInfo.hermites) {
               const hermite = edges[edgeIndex];
-              const closest = closestPointOnSegment(samplePoint, cellInfo.v, hermite.p);
-              const dx = closest.x - sample.x;
-              const dy = closest.y - sample.y;
-              const distanceSq = dx * dx + dy * dy;
-              if (!best || distanceSq < best.distanceSq) {
-                best = { closest, hermite, distanceSq };
-              }
+              constraints.push({
+                nx: hermite.n.x,
+                ny: hermite.n.y,
+                b: hermite.n.x * hermite.p.x + hermite.n.y * hermite.p.y,
+                w: hermiteWeight,
+              });
             }
-            if (!best) continue;
 
-            const dx = best.closest.x - sample.x;
-            const dy = best.closest.y - sample.y;
+            for (const sample of sampleAssignments[cellInfo.index]) {
+              const samplePoint = { x: sample.x, y: sample.y };
+              let best = null;
+              for (const edgeIndex of cellInfo.hermites) {
+                const hermite = edges[edgeIndex];
+                const closest = closestPointOnSegment(samplePoint, current, hermite.p);
+                const dx = closest.x - sample.x;
+                const dy = closest.y - sample.y;
+                const distanceSq = dx * dx + dy * dy;
+                if (!best || distanceSq < best.distanceSq) {
+                  best = { closest, hermite, distanceSq };
+                }
+              }
+              if (!best) continue;
+
+              const dx = best.closest.x - sample.x;
+              const dy = best.closest.y - sample.y;
+              const length = Math.hypot(dx, dy);
+              if (length < 0.0001) continue;
+              const nx = dx / length;
+              const ny = dy / length;
+              const vertexCoeff = 1 - best.closest.t;
+              if (vertexCoeff < 0.08) continue;
+              const b = (sample.distance + nx * sample.x + ny * sample.y - best.closest.t * (nx * best.hermite.p.x + ny * best.hermite.p.y)) / vertexCoeff;
+              constraints.push({
+                nx,
+                ny,
+                b,
+                w: distanceWeight * vertexCoeff * vertexCoeff,
+              });
+            }
+
+            constraints.push({ nx: 1, ny: 0, b: current.x, w: regularizationWeight });
+            constraints.push({ nx: 0, ny: 1, b: current.y, w: regularizationWeight });
+            const solved = solveWeightedConstraints(constraints, current, cellInfo.bounds);
+            let dx = solved.x - current.x;
+            let dy = solved.y - current.y;
             const length = Math.hypot(dx, dy);
-            if (length < 0.0001) continue;
-            const nx = dx / length;
-            const ny = dy / length;
-            const vertexCoeff = 1 - best.closest.t;
-            if (vertexCoeff < 0.08) continue;
-            const b = (sample.distance + nx * sample.x + ny * sample.y - best.closest.t * (nx * best.hermite.p.x + ny * best.hermite.p.y)) / vertexCoeff;
-            constraints.push({
-              nx,
-              ny,
-              b,
-              w: distanceWeight * vertexCoeff * vertexCoeff,
-            });
+            if (length > maxVertexMove) {
+              dx *= maxVertexMove / length;
+              dy *= maxVertexMove / length;
+            }
+            current = {
+              x: Math.min(cellInfo.bounds.x1, Math.max(cellInfo.bounds.x0, current.x + dx * vertexDamping)),
+              y: Math.min(cellInfo.bounds.y1, Math.max(cellInfo.bounds.y0, current.y + dy * vertexDamping)),
+            };
+            if (length < solveThreshold) break;
           }
 
-          constraints.push({ nx: 1, ny: 0, b: cellInfo.v.x, w: regularizationWeight });
-          constraints.push({ nx: 0, ny: 1, b: cellInfo.v.y, w: regularizationWeight });
-          const previous = cellInfo.v;
-          const solved = solveWeightedConstraints(constraints, previous, cellInfo.bounds);
-          let dx = solved.x - previous.x;
-          let dy = solved.y - previous.y;
-          const length = Math.hypot(dx, dy);
-          if (length > maxVertexMove) {
-            dx *= maxVertexMove / length;
-            dy *= maxVertexMove / length;
-          }
-          cellInfo.v = {
-            x: Math.min(cellInfo.bounds.x1, Math.max(cellInfo.bounds.x0, previous.x + dx * vertexDamping)),
-            y: Math.min(cellInfo.bounds.y1, Math.max(cellInfo.bounds.y0, previous.y + dy * vertexDamping)),
-          };
+          cellInfo.v = current;
         }
 
         for (const edge of edges) {
