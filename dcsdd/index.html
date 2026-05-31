@@ -105,6 +105,23 @@
       accent-color: var(--accent);
     }
 
+    select {
+      width: 100%;
+      height: 30px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      padding: 0 8px;
+    }
+
+    select:focus-visible {
+      outline: 1px solid rgba(66, 216, 180, 0.62);
+      outline-offset: 2px;
+    }
+
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -276,9 +293,19 @@
       <label>
         <span class="label-row">
           <span>Cell size</span>
-          <output id="cellOut">12 px</output>
+          <output id="cellOut">16 px</output>
         </span>
-        <input id="cell" type="range" min="5" max="36" step="1" value="12" />
+        <input id="cell" type="range" min="5" max="36" step="1" value="16" />
+      </label>
+
+      <label>
+        <span class="label-row">
+          <span>Problem setting</span>
+        </span>
+        <select id="normalMode">
+          <option value="grid">Grid samples only</option>
+          <option value="sdf">Arbitrary SDF samples</option>
+        </select>
       </label>
 
       <div class="button-row">
@@ -298,7 +325,7 @@
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring. Move the pointer to pull one source through the scalar field.</p>
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring. Grid-only estimates DC normals from bilinear cell interpolation.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -316,6 +343,7 @@
     const noteEl = document.querySelector("#note");
     const isoEl = document.querySelector("#iso");
     const cellEl = document.querySelector("#cell");
+    const normalModeEl = document.querySelector("#normalMode");
     const isoOut = document.querySelector("#isoOut");
     const cellOut = document.querySelector("#cellOut");
     const pauseButton = document.querySelector("#pause");
@@ -552,11 +580,11 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     }
 
     function shuffleBlobs() {
-      const shapes = ["square"];
+      const shapes = ["square", "diamond", "block"];
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.09 + Math.random() * 0.12,
+        radius: 0.15 + Math.random() * 0.12,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
         drift: 0.08 + Math.random() * 0.16,
@@ -639,7 +667,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       return interpolate(p[0], p[3], v[0], v[3], iso);
     }
 
-    function estimateNormal(x, y, t) {
+    function estimateSdfNormal(x, y, t) {
       const h = Math.max(1.5, Number(cellEl.value) * dpr * 0.12);
       const x0 = Math.max(0, x - h);
       const x1 = Math.min(width, x + h);
@@ -647,6 +675,17 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const y1 = Math.min(height, y + h);
       const gx = sampleField(x1, y, t) - sampleField(x0, y, t);
       const gy = sampleField(x, y1, t) - sampleField(x, y0, t);
+      const len = Math.hypot(gx, gy);
+      return len > 0.000001 ? [gx / len, gy / len] : [1, 0];
+    }
+
+    function estimateBilinearNormal(x, y, bounds, values) {
+      const sx = Math.max(0.0001, bounds.x1 - bounds.x0);
+      const sy = Math.max(0.0001, bounds.y1 - bounds.y0);
+      const u = Math.min(1, Math.max(0, (x - bounds.x0) / sx));
+      const v = Math.min(1, Math.max(0, (y - bounds.y0) / sy));
+      const gx = ((1 - v) * (values[1] - values[0]) + v * (values[2] - values[3])) / sx;
+      const gy = ((1 - u) * (values[3] - values[0]) + u * (values[2] - values[1])) / sy;
       const len = Math.hypot(gx, gy);
       return len > 0.000001 ? [gx / len, gy / len] : [1, 0];
     }
@@ -773,7 +812,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             const b = [1, 2, 2, 3][edge];
             if ((v[a] > iso) === (v[b] > iso)) continue;
             const crossing = edgePoint(edge, p, v, iso);
-            const normal = estimateNormal(crossing[0], crossing[1], t);
+            const normal = normalModeEl.value === "grid"
+              ? estimateBilinearNormal(crossing[0], crossing[1], { x0, y0, x1, y1 }, v)
+              : estimateSdfNormal(crossing[0], crossing[1], t);
             samples.push([crossing[0], crossing[1], normal[0], normal[1]]);
           }
           if (samples.length === 0) continue;
@@ -1058,7 +1099,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     shuffleButton.addEventListener("click", shuffleBlobs);
 
     window.addEventListener("keydown", (event) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement || event.target instanceof HTMLSelectElement) return;
       if (event.key === "1") visible.marching = !visible.marching;
       if (event.key === "2") visible.contouring = !visible.contouring;
       syncToggles();
