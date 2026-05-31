@@ -312,6 +312,14 @@
 
       <label>
         <span class="label-row">
+          <span>Outer iterations</span>
+          <output id="iterationOut">0</output>
+        </span>
+        <input id="iterations" type="range" min="0" max="20" step="1" value="0" />
+      </label>
+
+      <label>
+        <span class="label-row">
           <span>Problem setting</span>
         </span>
         <select id="normalMode">
@@ -374,8 +382,10 @@
     const statusEl = document.querySelector("#status");
     const noteEl = document.querySelector("#note");
     const cellEl = document.querySelector("#cell");
+    const iterationsEl = document.querySelector("#iterations");
     const normalModeEl = document.querySelector("#normalMode");
     const cellOut = document.querySelector("#cellOut");
+    const iterationOut = document.querySelector("#iterationOut");
     const pauseButton = document.querySelector("#pause");
     const shuffleButton = document.querySelector("#shuffle");
     const showMarchingEl = document.querySelector("#showMarching");
@@ -598,6 +608,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     function updateOutputs() {
       cellOut.value = `${cellEl.value} px`;
+      iterationOut.value = iterationsEl.value;
     }
 
     function syncToggles() {
@@ -1125,7 +1136,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteUpdateWeight = 0.18;
       const vertexDamping = 0.46;
       const maxVertexMove = cell * 0.28;
-      const outerIterations = 0;
+      const outerIterations = Number(iterationsEl.value);
 
       function gatherCellSamples(cellInfo) {
         const samples = [];
@@ -1647,7 +1658,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       requestAnimationFrame(render);
     }
 
-    for (const input of [cellEl]) {
+    for (const input of [cellEl, iterationsEl]) {
       input.addEventListener("input", updateOutputs);
     }
 
