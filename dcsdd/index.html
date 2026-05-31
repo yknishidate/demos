@@ -313,9 +313,9 @@
       <label>
         <span class="label-row">
           <span>Outer iterations</span>
-          <output id="iterationOut">0</output>
+          <output id="iterationOut">6</output>
         </span>
-        <input id="iterations" type="range" min="0" max="20" step="1" value="0" />
+        <input id="iterations" type="range" min="0" max="20" step="1" value="6" />
       </label>
 
       <label>
@@ -336,7 +336,7 @@
       <div class="toggle-row" aria-label="Display toggles">
         <label class="toggle" for="showMarching">
           <span class="toggle-name"><span class="swatch swatch-ms" aria-hidden="true"></span>Marching Squares</span>
-          <input id="showMarching" type="checkbox" checked />
+          <input id="showMarching" type="checkbox" />
         </label>
         <label class="toggle" for="showContouring">
           <span class="toggle-name"><span class="swatch swatch-dc" aria-hidden="true"></span>Dual Contouring</span>
@@ -353,10 +353,6 @@
         <label class="toggle" for="debugVertices">
           <span class="toggle-name"><span class="swatch swatch-vertex" aria-hidden="true"></span>Initial vertices</span>
           <input id="debugVertices" type="checkbox" />
-        </label>
-        <label class="toggle" for="debugSamples">
-          <span class="toggle-name">SDF samples debug</span>
-          <input id="debugSamples" type="checkbox" />
         </label>
         <label class="toggle" for="debugCircles">
           <span class="toggle-name"><span class="swatch swatch-circle" aria-hidden="true"></span>SDF circles</span>
@@ -393,7 +389,6 @@
     const showDcsddEl = document.querySelector("#showDcsdd");
     const debugHermiteEl = document.querySelector("#debugHermite");
     const debugVerticesEl = document.querySelector("#debugVertices");
-    const debugSamplesEl = document.querySelector("#debugSamples");
     const debugCirclesEl = document.querySelector("#debugCircles");
     const compactUiEl = document.querySelector("#compactUi");
 
@@ -428,7 +423,6 @@
     let hermiteDebugUniformBuffer;
     let normalDebugUniformBuffer;
     let vertexDebugUniformBuffer;
-    let sampleDebugUniformBuffer;
     let circleDebugUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
@@ -439,7 +433,6 @@
     let hermiteDebugBindGroup;
     let normalDebugBindGroup;
     let vertexDebugBindGroup;
-    let sampleDebugBindGroup;
     let circleDebugBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
@@ -453,12 +446,11 @@
     let pointer = { x: 0.5, y: 0.5, active: false };
     let blobs = [];
     const visible = {
-      marching: true,
+      marching: false,
       contouring: true,
       dcsdd: true,
       hermiteDebug: false,
       vertexDebug: false,
-      sampleDebug: false,
       circleDebug: false,
     };
     setupCompactUi({ hud: hudEl, button: compactUiEl });
@@ -617,7 +609,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       showDcsddEl.checked = visible.dcsdd;
       debugHermiteEl.checked = visible.hermiteDebug;
       debugVerticesEl.checked = visible.vertexDebug;
-      debugSamplesEl.checked = visible.sampleDebug;
       debugCirclesEl.checked = visible.circleDebug;
     }
 
@@ -1084,7 +1075,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         return index;
       }
 
-      // First pass: identify edge crossings and compute Hermite data
+      // 1. Detect sign-changing grid edges and initialize Hermite data.
       for (let y = 0; y < rows; y++) {
         for (let x = 0; x < cols; x++) {
           const x0 = x * cell;
@@ -1158,6 +1149,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const innerIterations = 12;
       const solveThreshold = 0.03 * dpr;
 
+      // 2. Gather nearby grid SDF samples for debug circles and local fallback.
       function gatherCellSamples(cellInfo) {
         const samples = [];
         const seen = new Set();
@@ -1182,6 +1174,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         return cellIndex(x, y, cols);
       }
 
+      // 3. Build the current global dual contour from pairs of neighboring cell vertices.
       function buildGlobalContourSegments() {
         const contour = [];
         for (const edge of edges) {
@@ -1197,6 +1190,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         return contour;
       }
 
+      // 4. Assign narrow-band SDF samples to cells through closest points on the global contour.
       function assignSamplesToCells() {
         const assignments = Array.from({ length: cells.length }, () => []);
         const contour = buildGlobalContourSegments();
@@ -1240,6 +1234,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
       for (let iteration = 0; iteration < outerIterations; iteration++) {
         const sampleAssignments = assignSamplesToCells();
+
+        // 5. Optimize each cell vertex with inner re-linearization of local polyline constraints.
         for (const cellInfo of cells) {
           if (!cellInfo) continue;
           let current = cellInfo.v;
@@ -1309,6 +1305,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           cellInfo.v = current;
         }
 
+        // 6. Update Hermite points and normals from the optimized global contour.
         for (const edge of edges) {
           const adjacent = edge.cells.map((index) => cells[index]).filter(Boolean);
           if (adjacent.length < 2) continue;
@@ -1341,6 +1338,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         }
       }
 
+      // 7. Emit the current DCSDD contour segments.
       const contourSegments = [];
       for (const edge of edges) {
         const adjacent = edge.cells.map((index) => cells[index]).filter(Boolean);
@@ -1357,10 +1355,11 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteSegments = [];
       const normalSegments = [];
       const vertexSegments = [];
-      const sampleSegments = [];
       const circleSegments = [];
       const cross = Math.max(1.5, dpr * 1.8);
       const normalScale = cell * 0.34;
+
+      // 8. Emit debug overlays for Hermite data, initial/current vertices, samples, and SDF circles.
       for (const edge of edges) {
         addCrossSegments(hermiteSegments, edge.p.x, edge.p.y, cross);
         normalSegments.push(edge.p.x, edge.p.y, edge.p.x + edge.n.x * normalScale, edge.p.y + edge.n.y * normalScale);
@@ -1370,14 +1369,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         addCrossSegments(vertexSegments, cellInfo.v.x, cellInfo.v.y, Math.max(2.2, dpr * 2.4));
       }
 
-      for (let gy = 0; gy <= rows; gy++) {
-        for (let gx = 0; gx <= cols; gx++) {
-          const value = values[gy * (cols + 1) + gx];
-          if (Math.abs(value - iso) > narrowBand) continue;
-          const p = gridVertexPoint(gx, gy, field);
-          addCrossSegments(sampleSegments, p.x, p.y, Math.max(1, dpr * 1.1));
-        }
-      }
       const circleSeen = new Set();
       for (const cellInfo of cells) {
         if (!cellInfo) continue;
@@ -1400,7 +1391,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         hermiteSegments: new Float32Array(hermiteSegments),
         normalSegments: new Float32Array(normalSegments),
         vertexSegments: new Float32Array(vertexSegments),
-        sampleSegments: new Float32Array(sampleSegments),
         circleSegments: new Float32Array(circleSegments),
         cellCount: cells.reduce((count, cellInfo) => count + (cellInfo ? 1 : 0), 0),
         edgeCount: edges.length,
@@ -1481,13 +1471,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
-      sampleDebugBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: sampleDebugUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
       circleDebugBindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
@@ -1507,14 +1490,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const dualSegments = visible.contouring ? buildDualSegments(field, phase) : new Float32Array();
-      const dcsdd = visible.dcsdd || visible.hermiteDebug || visible.vertexDebug || visible.sampleDebug || visible.circleDebug
+      const dcsdd = visible.dcsdd || visible.hermiteDebug || visible.vertexDebug || visible.circleDebug
         ? buildDcsddSegments(field)
         : {
             contourSegments: new Float32Array(),
             hermiteSegments: new Float32Array(),
             normalSegments: new Float32Array(),
             vertexSegments: new Float32Array(),
-            sampleSegments: new Float32Array(),
             circleSegments: new Float32Array(),
             cellCount: 0,
             edgeCount: 0,
@@ -1523,8 +1505,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteOffset = dcsddOffset + dcsdd.contourSegments.length;
       const normalOffset = hermiteOffset + dcsdd.hermiteSegments.length;
       const vertexOffset = normalOffset + dcsdd.normalSegments.length;
-      const sampleOffset = vertexOffset + dcsdd.vertexSegments.length;
-      const circleOffset = sampleOffset + dcsdd.sampleSegments.length;
+      const circleOffset = vertexOffset + dcsdd.vertexSegments.length;
       const combinedSegments = new Float32Array(circleOffset + dcsdd.circleSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
@@ -1533,7 +1514,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       combinedSegments.set(dcsdd.hermiteSegments, hermiteOffset);
       combinedSegments.set(dcsdd.normalSegments, normalOffset);
       combinedSegments.set(dcsdd.vertexSegments, vertexOffset);
-      combinedSegments.set(dcsdd.sampleSegments, sampleOffset);
       combinedSegments.set(dcsdd.circleSegments, circleOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
@@ -1547,7 +1527,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteDebugUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.15), 0, 1.0, 0.42, 0.67, 0.78]);
       const normalDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.78, 0.86, 1.0, 0.62]);
       const vertexDebugUniformData = new Float32Array([width, height, Math.max(1.2, dpr * 1.25), 0, 0.30, 0.86, 1.0, 0.82]);
-      const sampleDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 1.0, 0.92, 0.45, 0.58]);
       const circleDebugUniformData = new Float32Array([width, height, Math.max(1, dpr * 0.9), 0, 1.0, 0.56, 0.22, 0.38]);
       const backgroundUniformData = new Float32Array([width, height, 0, phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
@@ -1557,7 +1536,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       device.queue.writeBuffer(hermiteDebugUniformBuffer, 0, hermiteDebugUniformData);
       device.queue.writeBuffer(normalDebugUniformBuffer, 0, normalDebugUniformData);
       device.queue.writeBuffer(vertexDebugUniformBuffer, 0, vertexDebugUniformData);
-      device.queue.writeBuffer(sampleDebugUniformBuffer, 0, sampleDebugUniformData);
       device.queue.writeBuffer(circleDebugUniformBuffer, 0, circleDebugUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
@@ -1598,10 +1576,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (visible.vertexDebug) {
         pass.setBindGroup(0, vertexDebugBindGroup);
         pass.draw(6, dcsdd.vertexSegments.length / 4, 0, vertexOffset / 4);
-      }
-      if (visible.sampleDebug) {
-        pass.setBindGroup(0, sampleDebugBindGroup);
-        pass.draw(6, dcsdd.sampleSegments.length / 4, 0, sampleOffset / 4);
       }
       if (visible.circleDebug) {
         pass.setBindGroup(0, circleDebugBindGroup);
@@ -1679,10 +1653,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       vertexDebugUniformBuffer = device.createBuffer({
-        size: 32,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      sampleDebugUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
@@ -1769,10 +1739,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     debugVerticesEl.addEventListener("change", () => {
       visible.vertexDebug = debugVerticesEl.checked;
-    });
-
-    debugSamplesEl.addEventListener("change", () => {
-      visible.sampleDebug = debugSamplesEl.checked;
     });
 
     debugCirclesEl.addEventListener("change", () => {
