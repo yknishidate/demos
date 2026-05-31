@@ -43,12 +43,43 @@
       position: fixed;
       inset: 18px auto auto 18px;
       width: min(330px, calc(100vw - 36px));
-      padding: 12px;
+      padding: 12px 12px 28px;
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       background: var(--panel);
       box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
       backdrop-filter: blur(16px);
+    }
+
+    .compact-toggle-button {
+      position: absolute;
+      inset: auto 8px 6px auto;
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: rgba(170, 180, 192, 0.78);
+      font-size: 13px;
+      line-height: 1;
+    }
+
+    .compact-toggle-button svg {
+      width: 14px;
+      height: 14px;
+      transition: transform 140ms ease;
+    }
+
+    .hud.collapsed .compact-toggle-button svg {
+      transform: rotate(180deg);
+    }
+
+    .compact-toggle-button:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.07);
     }
 
     .title-row {
@@ -208,6 +239,25 @@
       color: var(--danger);
     }
 
+    .hud.collapsed {
+      width: min(260px, calc(100vw - 36px));
+    }
+
+    .hud.collapsed .title-row,
+    .hud.collapsed .controls > label:not(.toggle),
+    .hud.collapsed .button-row,
+    .hud.collapsed .note {
+      display: none;
+    }
+
+    .hud.collapsed .controls {
+      gap: 0;
+    }
+
+    .hud.collapsed .toggle-row {
+      margin-top: 0;
+    }
+
     @media (max-width: 640px) {
       .hud {
         inset: auto 12px 12px 12px;
@@ -243,7 +293,12 @@
 <body>
   <canvas id="canvas"></canvas>
 
-  <section class="hud" aria-label="Marching triangle controls">
+  <section class="hud" id="hud" aria-label="Marching triangle controls">
+    <button class="compact-toggle-button" id="compactUi" type="button" aria-label="Collapse controls" title="Collapse controls">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
     <div class="title-row">
       <h1>Subgrid Marching Triangle</h1>
       <div class="status" id="status">starting</div>
@@ -306,6 +361,7 @@
 
   <script type="module">
     const canvas = document.querySelector("#canvas");
+    const hudEl = document.querySelector("#hud");
     const statusEl = document.querySelector("#status");
     const noteEl = document.querySelector("#note");
     const isoEl = document.querySelector("#iso");
@@ -319,6 +375,7 @@
     const showClassicEl = document.querySelector("#showClassic");
     const showSubgridEl = document.querySelector("#showSubgrid");
     const splitViewEl = document.querySelector("#splitView");
+    const compactUiEl = document.querySelector("#compactUi");
 
     let device;
     let context;
@@ -351,6 +408,7 @@
       subgrid: true,
       split: false,
     };
+    let compactUi = false;
 
     const shaderCode = `
 struct Uniforms {
@@ -511,6 +569,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       showClassicEl.checked = visible.classic;
       showSubgridEl.checked = visible.subgrid;
       splitViewEl.checked = visible.split;
+      compactUiEl.setAttribute("aria-label", compactUi ? "Expand controls" : "Collapse controls");
+      compactUiEl.title = compactUi ? "Expand controls" : "Collapse controls";
+      hudEl.classList.toggle("collapsed", compactUi);
     }
 
     function shapeId(shape) {
@@ -1050,6 +1111,11 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     splitViewEl.addEventListener("change", () => {
       visible.split = splitViewEl.checked;
+    });
+
+    compactUiEl.addEventListener("click", () => {
+      compactUi = !compactUi;
+      syncToggles();
     });
 
     pauseButton.addEventListener("click", () => {
