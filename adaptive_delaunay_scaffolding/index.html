@@ -275,14 +275,6 @@
         <input id="cell" type="range" min="5" max="36" step="1" value="20" />
       </label>
 
-      <label>
-        <span class="label-row">
-          <span>Line width</span>
-          <output id="widthOut">3.0 px</output>
-        </span>
-        <input id="width" type="range" min="1" max="8" step="0.5" value="3" />
-      </label>
-
       <div class="button-row">
         <button id="pause" type="button">Pause</button>
         <button id="shuffle" type="button">Shuffle field</button>
@@ -315,10 +307,8 @@
     const noteEl = document.querySelector("#note");
     const isoEl = document.querySelector("#iso");
     const cellEl = document.querySelector("#cell");
-    const widthEl = document.querySelector("#width");
     const isoOut = document.querySelector("#isoOut");
     const cellOut = document.querySelector("#cellOut");
-    const widthOut = document.querySelector("#widthOut");
     const pauseButton = document.querySelector("#pause");
     const shuffleButton = document.querySelector("#shuffle");
     const showMarchingEl = document.querySelector("#showMarching");
@@ -541,7 +531,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function updateOutputs() {
       isoOut.value = Number(isoEl.value).toFixed(2);
       cellOut.value = `${cellEl.value} px`;
-      widthOut.value = `${Number(widthEl.value).toFixed(1)} px`;
     }
 
     function shapeId(shape) {
@@ -1257,14 +1246,14 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       }
 
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
-      const marchingUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
+      const marchingUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
       const scaffoldUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.05), 0, 0.56, 0.64, 0.72, 0.20]);
-      const crossingUniformData = new Float32Array([width, height, Math.max(1.5, Number(widthEl.value) * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88]);
+      const crossingUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88]);
       const insidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.30, 1.0, 0.62, 0.76]);
       const outsidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.45, 0.58, 1.0, 0.70]);
       const insertedPointUniformData = new Float32Array([width, height, Math.max(1.8, dpr * 2.0), 0, 1.0, 0.33, 0.64, 0.86]);
       const crossingSampleUniformData = new Float32Array([width, height, Math.max(1.6, dpr * 1.8), 0, 0.97, 0.98, 0.88, 0.92]);
-      const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, Number(widthEl.value) * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94]);
+      const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(marchingUniformBuffer, 0, marchingUniformData);
@@ -1456,7 +1445,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       requestAnimationFrame(render);
     }
 
-    for (const input of [isoEl, cellEl, widthEl]) {
+    for (const input of [isoEl, cellEl]) {
       input.addEventListener("input", updateOutputs);
     }
 
