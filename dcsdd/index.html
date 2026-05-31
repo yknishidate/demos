@@ -196,6 +196,11 @@
       background: currentColor;
     }
 
+    .swatch-vertex {
+      color: rgb(73, 221, 255);
+      background: currentColor;
+    }
+
     .toggle input {
       width: 16px;
       height: 16px;
@@ -332,6 +337,10 @@
           <span class="toggle-name"><span class="swatch swatch-debug" aria-hidden="true"></span>Hermite debug</span>
           <input id="debugHermite" type="checkbox" />
         </label>
+        <label class="toggle" for="debugVertices">
+          <span class="toggle-name"><span class="swatch swatch-vertex" aria-hidden="true"></span>Initial vertices</span>
+          <input id="debugVertices" type="checkbox" />
+        </label>
         <label class="toggle" for="debugSamples">
           <span class="toggle-name">SDF samples debug</span>
           <input id="debugSamples" type="checkbox" />
@@ -339,7 +348,7 @@
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: DCSDD. DCSDD uses grid samples only and refines Hermite data iteratively.</p>
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: DCSDD. DCSDD optimization is currently disabled to inspect initialization.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -364,6 +373,7 @@
     const showContouringEl = document.querySelector("#showContouring");
     const showDcsddEl = document.querySelector("#showDcsdd");
     const debugHermiteEl = document.querySelector("#debugHermite");
+    const debugVerticesEl = document.querySelector("#debugVertices");
     const debugSamplesEl = document.querySelector("#debugSamples");
     const compactUiEl = document.querySelector("#compactUi");
 
@@ -397,6 +407,7 @@
     let dcsddUniformBuffer;
     let hermiteDebugUniformBuffer;
     let normalDebugUniformBuffer;
+    let vertexDebugUniformBuffer;
     let sampleDebugUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
@@ -406,6 +417,7 @@
     let dcsddBindGroup;
     let hermiteDebugBindGroup;
     let normalDebugBindGroup;
+    let vertexDebugBindGroup;
     let sampleDebugBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
@@ -423,6 +435,7 @@
       contouring: true,
       dcsdd: true,
       hermiteDebug: false,
+      vertexDebug: false,
       sampleDebug: false,
     };
     setupCompactUi({ hud: hudEl, button: compactUiEl });
@@ -579,6 +592,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       showContouringEl.checked = visible.contouring;
       showDcsddEl.checked = visible.dcsdd;
       debugHermiteEl.checked = visible.hermiteDebug;
+      debugVerticesEl.checked = visible.vertexDebug;
       debugSamplesEl.checked = visible.sampleDebug;
     }
 
@@ -1082,7 +1096,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteUpdateWeight = 0.18;
       const vertexDamping = 0.46;
       const maxVertexMove = cell * 0.28;
-      const outerIterations = 9;
+      const outerIterations = 0;
 
       function gatherCellSamples(cellInfo) {
         const samples = [];
@@ -1213,6 +1227,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
       const hermiteSegments = [];
       const normalSegments = [];
+      const vertexSegments = [];
       const sampleSegments = [];
       const cross = Math.max(1.5, dpr * 1.8);
       const normalScale = cell * 0.34;
@@ -1220,15 +1235,17 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         addCrossSegments(hermiteSegments, edge.p.x, edge.p.y, cross);
         normalSegments.push(edge.p.x, edge.p.y, edge.p.x + edge.n.x * normalScale, edge.p.y + edge.n.y * normalScale);
       }
-
-      const sampleSeen = new Set();
       for (const cellInfo of cells) {
         if (!cellInfo) continue;
-        for (const sample of gatherCellSamples(cellInfo)) {
-          const key = `${Math.round(sample.x)}:${Math.round(sample.y)}`;
-          if (sampleSeen.has(key) || sampleSeen.size > 420) continue;
-          sampleSeen.add(key);
-          addCrossSegments(sampleSegments, sample.x, sample.y, Math.max(1, dpr * 1.1));
+        addCrossSegments(vertexSegments, cellInfo.v.x, cellInfo.v.y, Math.max(2.2, dpr * 2.4));
+      }
+
+      for (let gy = 0; gy <= rows; gy++) {
+        for (let gx = 0; gx <= cols; gx++) {
+          const value = values[gy * (cols + 1) + gx];
+          if (Math.abs(value - iso) > narrowBand) continue;
+          const p = gridVertexPoint(gx, gy, field);
+          addCrossSegments(sampleSegments, p.x, p.y, Math.max(1, dpr * 1.1));
         }
       }
 
@@ -1236,6 +1253,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         contourSegments: new Float32Array(contourSegments),
         hermiteSegments: new Float32Array(hermiteSegments),
         normalSegments: new Float32Array(normalSegments),
+        vertexSegments: new Float32Array(vertexSegments),
         sampleSegments: new Float32Array(sampleSegments),
         cellCount: cells.reduce((count, cellInfo) => count + (cellInfo ? 1 : 0), 0),
         edgeCount: edges.length,
@@ -1309,6 +1327,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      vertexDebugBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: vertexDebugUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
       sampleDebugBindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
@@ -1328,12 +1353,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const dualSegments = visible.contouring ? buildDualSegments(field, phase) : new Float32Array();
-      const dcsdd = visible.dcsdd || visible.hermiteDebug || visible.sampleDebug
+      const dcsdd = visible.dcsdd || visible.hermiteDebug || visible.vertexDebug || visible.sampleDebug
         ? buildDcsddSegments(field)
         : {
             contourSegments: new Float32Array(),
             hermiteSegments: new Float32Array(),
             normalSegments: new Float32Array(),
+            vertexSegments: new Float32Array(),
             sampleSegments: new Float32Array(),
             cellCount: 0,
             edgeCount: 0,
@@ -1341,7 +1367,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const dcsddOffset = gridSegments.length + segments.length + dualSegments.length;
       const hermiteOffset = dcsddOffset + dcsdd.contourSegments.length;
       const normalOffset = hermiteOffset + dcsdd.hermiteSegments.length;
-      const sampleOffset = normalOffset + dcsdd.normalSegments.length;
+      const vertexOffset = normalOffset + dcsdd.normalSegments.length;
+      const sampleOffset = vertexOffset + dcsdd.vertexSegments.length;
       const combinedSegments = new Float32Array(sampleOffset + dcsdd.sampleSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
@@ -1349,6 +1376,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       combinedSegments.set(dcsdd.contourSegments, dcsddOffset);
       combinedSegments.set(dcsdd.hermiteSegments, hermiteOffset);
       combinedSegments.set(dcsdd.normalSegments, normalOffset);
+      combinedSegments.set(dcsdd.vertexSegments, vertexOffset);
       combinedSegments.set(dcsdd.sampleSegments, sampleOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
@@ -1361,6 +1389,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const dcsddUniformData = new Float32Array([width, height, Math.max(1, 3 * dpr * 0.62), 0, 0.68, 0.60, 1.0, 0.9]);
       const hermiteDebugUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.15), 0, 1.0, 0.42, 0.67, 0.78]);
       const normalDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.78, 0.86, 1.0, 0.62]);
+      const vertexDebugUniformData = new Float32Array([width, height, Math.max(1.2, dpr * 1.25), 0, 0.30, 0.86, 1.0, 0.82]);
       const sampleDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 1.0, 0.92, 0.45, 0.58]);
       const backgroundUniformData = new Float32Array([width, height, 0, phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
@@ -1369,6 +1398,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       device.queue.writeBuffer(dcsddUniformBuffer, 0, dcsddUniformData);
       device.queue.writeBuffer(hermiteDebugUniformBuffer, 0, hermiteDebugUniformData);
       device.queue.writeBuffer(normalDebugUniformBuffer, 0, normalDebugUniformData);
+      device.queue.writeBuffer(vertexDebugUniformBuffer, 0, vertexDebugUniformData);
       device.queue.writeBuffer(sampleDebugUniformBuffer, 0, sampleDebugUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
@@ -1405,6 +1435,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.draw(6, dcsdd.hermiteSegments.length / 4, 0, hermiteOffset / 4);
         pass.setBindGroup(0, normalDebugBindGroup);
         pass.draw(6, dcsdd.normalSegments.length / 4, 0, normalOffset / 4);
+      }
+      if (visible.vertexDebug) {
+        pass.setBindGroup(0, vertexDebugBindGroup);
+        pass.draw(6, dcsdd.vertexSegments.length / 4, 0, vertexOffset / 4);
       }
       if (visible.sampleDebug) {
         pass.setBindGroup(0, sampleDebugBindGroup);
@@ -1478,6 +1512,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       normalDebugUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      vertexDebugUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
@@ -1560,6 +1598,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     debugHermiteEl.addEventListener("change", () => {
       visible.hermiteDebug = debugHermiteEl.checked;
+    });
+
+    debugVerticesEl.addEventListener("change", () => {
+      visible.vertexDebug = debugVerticesEl.checked;
     });
 
     debugSamplesEl.addEventListener("change", () => {
