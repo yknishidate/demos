@@ -309,50 +309,7 @@
         </span>
         <input id="cell" type="range" min="5" max="36" step="1" value="16" />
       </label>
-
-      <label>
-        <span class="label-row">
-          <span>Outer iterations</span>
-          <output id="iterationOut">6</output>
-        </span>
-        <input id="iterations" type="range" min="0" max="20" step="1" value="6" />
-      </label>
-
-      <label>
-        <span class="label-row">
-          <span>Hermite weight w_H</span>
-          <output id="hermiteWeightOut">0.020</output>
-        </span>
-        <input id="hermiteWeight" type="range" min="0" max="0.12" step="0.002" value="0.02" />
-      </label>
-
-      <label>
-        <span class="label-row">
-          <span>Update weight w_u</span>
-          <output id="updateWeightOut">0.060</output>
-        </span>
-        <input id="updateWeight" type="range" min="0" max="0.5" step="0.01" value="0.06" />
-      </label>
-
-      <label>
-        <span class="label-row">
-          <span>Regularization μ</span>
-          <output id="regularizationOut">0.055</output>
-        </span>
-        <input id="regularization" type="range" min="0" max="0.2" step="0.005" value="0.055" />
-      </label>
-
-      <label>
-        <span class="label-row">
-          <span>Problem setting</span>
-        </span>
-        <select id="normalMode">
-          <option value="grid">Grid samples only</option>
-          <option value="sdf">Arbitrary SDF samples</option>
-        </select>
-      </label>
-
-      <div class="button-row">
+<div class="button-row">
         <button id="pause" type="button">Pause</button>
         <button id="shuffle" type="button">Shuffle field</button>
       </div>
@@ -385,7 +342,13 @@
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: DCSDD. DCSDD optimization is currently disabled to inspect initialization.</p>
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: DCSDD.</p>
+    <a class="repo-link" href="https://gatc.cs.columbia.edu/projects/dual-contouring-of-signed-distance-data.html" target="_blank" rel="noreferrer">
+      <span>Dual Contouring of Signed Distance Data</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -402,16 +365,7 @@
     const statusEl = document.querySelector("#status");
     const noteEl = document.querySelector("#note");
     const cellEl = document.querySelector("#cell");
-    const iterationsEl = document.querySelector("#iterations");
-    const hermiteWeightEl = document.querySelector("#hermiteWeight");
-    const updateWeightEl = document.querySelector("#updateWeight");
-    const regularizationEl = document.querySelector("#regularization");
-    const normalModeEl = document.querySelector("#normalMode");
     const cellOut = document.querySelector("#cellOut");
-    const iterationOut = document.querySelector("#iterationOut");
-    const hermiteWeightOut = document.querySelector("#hermiteWeightOut");
-    const updateWeightOut = document.querySelector("#updateWeightOut");
-    const regularizationOut = document.querySelector("#regularizationOut");
     const pauseButton = document.querySelector("#pause");
     const shuffleButton = document.querySelector("#shuffle");
     const showMarchingEl = document.querySelector("#showMarching");
@@ -654,10 +608,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     function updateOutputs() {
       cellOut.value = `${cellEl.value} px`;
-      iterationOut.value = iterationsEl.value;
-      hermiteWeightOut.value = Number(hermiteWeightEl.value).toFixed(3);
-      updateWeightOut.value = Number(updateWeightEl.value).toFixed(3);
-      regularizationOut.value = Number(regularizationEl.value).toFixed(3);
     }
 
     function syncToggles() {
@@ -969,9 +919,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             const b = [1, 2, 2, 3][edge];
             if ((v[a] > iso) === (v[b] > iso)) continue;
             const crossing = edgePoint(edge, p, v, iso);
-            const normal = normalModeEl.value === "grid"
-              ? estimateBilinearNormal(crossing[0], crossing[1], { x0, y0, x1, y1 }, v)
-              : estimateSdfNormal(crossing[0], crossing[1], t);
+            const normal = estimateBilinearNormal(crossing[0], crossing[1], { x0, y0, x1, y1 }, v);
             samples.push([crossing[0], crossing[1], normal[0], normal[1]]);
           }
           if (samples.length === 0) continue;
@@ -1259,14 +1207,14 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
       const narrowBand = cell * 2.5;
       const distanceWeight = 0.07;
-      const hermiteWeight = Number(hermiteWeightEl.value);
-      const regularizationWeight = Number(regularizationEl.value);
-      const hermiteUpdateWeight = Number(updateWeightEl.value);
+      const hermiteWeight = 0.02;
+      const regularizationWeight = 0.055;
+      const hermiteUpdateWeight = 0.06;
       const vertexDamping = 1.0;
       const maxVertexMove = cell * 0.25;
       const trustRadius = cell * 1.5;
       const maxSamplesPerCell = 18;
-      const outerIterations = Number(iterationsEl.value);
+      const outerIterations = 6;
       const innerIterations = 12;
       const solveThreshold = 0.03 * dpr;
 
@@ -1859,7 +1807,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       requestAnimationFrame(render);
     }
 
-    for (const input of [cellEl, iterationsEl, hermiteWeightEl, updateWeightEl, regularizationEl]) {
+    for (const input of [cellEl]) {
       input.addEventListener("input", updateOutputs);
     }
 
