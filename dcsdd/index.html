@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DCS-DD</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101216;
+      --panel: rgba(18, 22, 28, 0.86);
+      --panel-border: rgba(255, 255, 255, 0.12);
+      --text: #f2f5f8;
+      --muted: #aab4c0;
+      --accent: #42d8b4;
+      --accent-2: #f0b84f;
+      --danger: #ff6b6b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        linear-gradient(120deg, rgba(66, 216, 180, 0.08), transparent 40%),
+        linear-gradient(300deg, rgba(240, 184, 79, 0.08), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+
+    .hud {
+      position: fixed;
+      inset: 18px auto auto 18px;
+      width: min(330px, calc(100vw - 36px));
+      padding: 12px 12px 28px;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(16px);
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-width: 172px;
+      color: var(--accent);
+      font-size: 11px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .controls {
+      display: grid;
+      gap: 9px;
+    }
+
+    label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    output {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
+    button {
+      height: 32px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text);
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: rgba(66, 216, 180, 0.48);
+      background: rgba(66, 216, 180, 0.12);
+    }
+
+    .toggle-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 26px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .toggle-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      flex: 0 0 auto;
+      border-radius: 3px;
+    }
+
+    .swatch-ms {
+      color: rgb(84, 255, 179);
+      background: currentColor;
+    }
+
+    .swatch-dc {
+      color: rgb(255, 199, 66);
+      background: currentColor;
+    }
+
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .note {
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .repo-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 6px;
+      color: rgba(170, 180, 192, 0.78);
+      font-size: 11px;
+      text-decoration: none;
+    }
+
+    .repo-link:hover {
+      color: var(--text);
+      text-decoration: underline;
+    }
+
+    .external-mark {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      opacity: 0.82;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    @media (max-width: 640px) {
+      .hud {
+        inset: auto 12px 12px 12px;
+        width: auto;
+        padding: 10px 12px;
+      }
+
+      .title-row,
+      .controls > label,
+      .button-row,
+      .note {
+        display: none;
+      }
+
+      .controls {
+        gap: 0;
+      }
+
+      .toggle-row {
+        gap: 4px;
+        margin-top: 0;
+      }
+
+      .toggle {
+        min-height: 24px;
+        gap: 10px;
+      }
+
+      .toggle input {
+        width: 15px;
+        height: 15px;
+      }
+
+      .repo-link {
+        margin-top: 6px;
+        font-size: 11px;
+      }
+    }
+  </style>
+  <link rel="stylesheet" href="../shared/demo-ui.css" />
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <section class="hud" id="hud" aria-label="Marching squares controls">
+    <button class="compact-toggle-button" id="compactUi" type="button" aria-label="Collapse controls" title="Collapse controls">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="m6 15 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <div class="title-row">
+      <h1>DCS-DD</h1>
+      <div class="status" id="status">starting</div>
+    </div>
+
+    <div class="controls">
+      <label>
+        <span class="label-row">
+          <span>Iso value</span>
+          <output id="isoOut">0.80</output>
+        </span>
+        <input id="iso" type="range" min="0.25" max="1.8" step="0.01" value="0.80" />
+      </label>
+
+      <label>
+        <span class="label-row">
+          <span>Cell size</span>
+          <output id="cellOut">12 px</output>
+        </span>
+        <input id="cell" type="range" min="5" max="36" step="1" value="12" />
+      </label>
+
+      <div class="button-row">
+        <button id="pause" type="button">Pause</button>
+        <button id="shuffle" type="button">Shuffle field</button>
+      </div>
+
+      <div class="toggle-row" aria-label="Display toggles">
+        <label class="toggle" for="showMarching">
+          <span class="toggle-name"><span class="swatch swatch-ms" aria-hidden="true"></span>Marching Squares</span>
+          <input id="showMarching" type="checkbox" checked />
+        </label>
+        <label class="toggle" for="showContouring">
+          <span class="toggle-name"><span class="swatch swatch-dc" aria-hidden="true"></span>Dual Contouring</span>
+          <input id="showContouring" type="checkbox" checked />
+        </label>
+      </div>
+    </div>
+
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring. Move the pointer to pull one source through the scalar field.</p>
+    <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
+      <span>github.com/yknishidate/demos</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
+  </section>
+
+  <script type="module">
+    import { setupCompactUi } from "../shared/demo-ui.js";
+
+    const canvas = document.querySelector("#canvas");
+    const hudEl = document.querySelector("#hud");
+    const statusEl = document.querySelector("#status");
+    const noteEl = document.querySelector("#note");
+    const isoEl = document.querySelector("#iso");
+    const cellEl = document.querySelector("#cell");
+    const isoOut = document.querySelector("#isoOut");
+    const cellOut = document.querySelector("#cellOut");
+    const pauseButton = document.querySelector("#pause");
+    const shuffleButton = document.querySelector("#shuffle");
+    const showMarchingEl = document.querySelector("#showMarching");
+    const showContouringEl = document.querySelector("#showContouring");
+    const compactUiEl = document.querySelector("#compactUi");
+
+    const edgePairs = [
+      [],
+      [[3, 2]],
+      [[2, 1]],
+      [[3, 1]],
+      [[0, 1]],
+      [[0, 1], [3, 2]],
+      [[0, 2]],
+      [[0, 3]],
+      [[0, 3]],
+      [[0, 2]],
+      [[0, 3], [2, 1]],
+      [[0, 1]],
+      [[3, 1]],
+      [[2, 1]],
+      [[3, 2]],
+      [],
+    ];
+
+    let device;
+    let context;
+    let pipeline;
+    let backgroundPipeline;
+    let backgroundUniformBuffer;
+    let blobBuffer;
+    let contourUniformBuffer;
+    let dualUniformBuffer;
+    let gridUniformBuffer;
+    let segmentBuffer;
+    let backgroundBindGroup;
+    let contourBindGroup;
+    let dualBindGroup;
+    let gridBindGroup;
+    let segmentCapacity = 0;
+    let presentationFormat;
+    let width = 1;
+    let height = 1;
+    let dpr = 1;
+    let paused = false;
+    let phase = 0;
+    let lastTime = performance.now();
+    let pointer = { x: 0.5, y: 0.5, active: false };
+    let blobs = [];
+    const visible = {
+      marching: true,
+      contouring: true,
+    };
+    setupCompactUi({ hud: hudEl, button: compactUiEl });
+
+    const shaderCode = `
+struct Uniforms {
+  resolution: vec2f,
+  thickness: f32,
+  _pad: f32,
+  color: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> segments: array<vec4f>;
+
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) local: vec2f,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOut {
+  let seg = segments[instanceIndex];
+  let a = seg.xy;
+  let b = seg.zw;
+  let dir = normalize(b - a);
+  let normal = vec2f(-dir.y, dir.x);
+  let corner = array<vec2f, 6>(
+    vec2f(0.0, -1.0),
+    vec2f(1.0, -1.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, -1.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0)
+  )[vertexIndex];
+  let p = mix(a, b, corner.x) + normal * corner.y * uniforms.thickness * 0.5;
+  let clip = (p / uniforms.resolution) * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0);
+
+  var out: VertexOut;
+  out.position = vec4f(clip, 0.0, 1.0);
+  out.local = corner;
+  return out;
+}
+
+@fragment
+fn fs(in: VertexOut) -> @location(0) vec4f {
+  let core = 1.0 - smoothstep(0.72, 1.0, abs(in.local.y));
+  let glow = 1.0 - smoothstep(0.95, 1.65, abs(in.local.y));
+  let tint = mix(uniforms.color.rgb * 0.82, uniforms.color.rgb, core);
+  return vec4f(tint, uniforms.color.a * max(core, glow * 0.45));
+}`;
+
+    const backgroundShaderCode = `
+struct Blob {
+  a: vec4f,
+  b: vec4f,
+  c: vec4f,
+};
+
+struct BackgroundUniforms {
+  resolution: vec2f,
+  iso: f32,
+  phase: f32,
+  pointer: vec2f,
+  pointerActive: f32,
+  _pad: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
+@group(0) @binding(1) var<storage, read> blobs: array<Blob, 7>;
+
+fn shapeMetric(blob: Blob, dx: f32, dy: f32) -> f32 {
+  let canvasAspect = uniforms.resolution.x / uniforms.resolution.y;
+  let sx = dx * canvasAspect;
+  let sy = dy;
+  let radius = blob.a.z;
+  let speed = blob.a.w;
+  let angle = blob.b.x;
+  let rotation = blob.b.z;
+  let aspect = blob.b.w;
+  let shape = blob.c.x;
+  let turn = rotation + sin(uniforms.phase * speed * 0.7 + angle) * 0.45;
+  let c = cos(turn);
+  let s = sin(turn);
+  let rx = (sx * c - sy * s) / radius;
+  let ry = (sx * s + sy * c) / (radius * aspect);
+  let ax = abs(rx);
+  let ay = abs(ry);
+
+  if (shape < 0.5) {
+    return length(vec2f(rx, ry));
+  }
+  if (shape < 1.5) {
+    return max(ax, ay);
+  }
+  if (shape < 2.5) {
+    return ax + ay;
+  }
+  return max(ax / 1.45, ay / 0.58);
+}
+
+fn sampleField(pixel: vec2f) -> f32 {
+  let n = pixel / uniforms.resolution;
+  var v = 0.0;
+
+  for (var i = 0u; i < 7u; i = i + 1u) {
+    let blob = blobs[i];
+    let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
+    let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
+    let metric = shapeMetric(blob, n.x - bx, n.y - by);
+    let core = max(0.0, 1.0 - metric);
+    v = v + blob.c.y * (1.0 / (metric * metric + 0.22) + core * core * 1.6);
+  }
+
+  if (uniforms.pointerActive > 0.5) {
+    let dx = n.x - uniforms.pointer.x;
+    let dy = n.y - uniforms.pointer.y;
+    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
+    let pointerCore = max(0.0, 1.0 - pointerMetric);
+    v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+  }
+
+  let ripple = sin(n.x * 20.0 + uniforms.phase * 0.8) * cos(n.y * 16.0 - uniforms.phase * 0.7) * 0.045;
+  return v * 0.18 + ripple;
+}
+
+@vertex
+fn bgVs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
+  let p = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0)
+  )[vertexIndex];
+  return vec4f(p, 0.0, 1.0);
+}
+
+@fragment
+fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let field = sampleField(position.xy);
+  let band = 1.0 - smoothstep(0.0, 0.11, abs(field - uniforms.iso));
+  if (field > uniforms.iso) {
+    return vec4f(0.11, 0.50, 0.38, 0.51 + band * 0.21);
+  }
+  return vec4f(0.20, 0.22, 0.32, 0.27 + band * 0.15);
+}`;
+
+    function updateOutputs() {
+      isoOut.value = Number(isoEl.value).toFixed(2);
+      cellOut.value = `${cellEl.value} px`;
+    }
+
+    function syncToggles() {
+      showMarchingEl.checked = visible.marching;
+      showContouringEl.checked = visible.contouring;
+    }
+
+    function shapeId(shape) {
+      if (shape === "square") return 1;
+      if (shape === "diamond") return 2;
+      if (shape === "block") return 3;
+      return 0;
+    }
+
+    function buildBlobData() {
+      const data = new Float32Array(7 * 12);
+      for (let i = 0; i < blobs.length; i++) {
+        const blob = blobs[i];
+        const offset = i * 12;
+        data[offset] = blob.x;
+        data[offset + 1] = blob.y;
+        data[offset + 2] = blob.radius;
+        data[offset + 3] = blob.speed;
+        data[offset + 4] = blob.angle;
+        data[offset + 5] = blob.drift;
+        data[offset + 6] = blob.rotation;
+        data[offset + 7] = blob.aspect;
+        data[offset + 8] = shapeId(blob.shape);
+        data[offset + 9] = blob.weight;
+      }
+      return data;
+    }
+
+    function shuffleBlobs() {
+      const shapes = ["square"];
+      blobs = Array.from({ length: 7 }, (_, i) => ({
+        x: Math.random(),
+        y: Math.random(),
+        radius: 0.09 + Math.random() * 0.12,
+        speed: 0.35 + Math.random() * 0.85,
+        angle: Math.random() * Math.PI * 2,
+        drift: 0.08 + Math.random() * 0.16,
+        rotation: Math.random() * Math.PI,
+        aspect: 0.65 + Math.random() * 0.9,
+        shape: shapes[i % shapes.length],
+        weight: i % 3 === 0 ? 1.35 : 1.0,
+      }));
+    }
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, Math.floor(rect.width * dpr));
+      height = Math.max(1, Math.floor(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    }
+
+    function shapeMetric(blob, dx, dy, t) {
+      const canvasAspect = width / height;
+      const sx = dx * canvasAspect;
+      const sy = dy;
+      const turn = blob.rotation + Math.sin(t * blob.speed * 0.7 + blob.angle) * 0.45;
+      const c = Math.cos(turn);
+      const s = Math.sin(turn);
+      const rx = (sx * c - sy * s) / blob.radius;
+      const ry = (sx * s + sy * c) / (blob.radius * blob.aspect);
+      const ax = Math.abs(rx);
+      const ay = Math.abs(ry);
+
+      if (blob.shape === "square") return Math.max(ax, ay);
+      if (blob.shape === "diamond") return ax + ay;
+      if (blob.shape === "block") return Math.max(ax / 1.45, ay / 0.58);
+      return Math.hypot(rx, ry);
+    }
+
+    function sampleField(x, y, t) {
+      const nx = x / width;
+      const ny = y / height;
+      let v = 0;
+
+      for (const blob of blobs) {
+        const bx = blob.x + Math.cos(t * blob.speed + blob.angle) * blob.drift;
+        const by = blob.y + Math.sin(t * blob.speed * 0.83 + blob.angle * 1.7) * blob.drift;
+        const dx = nx - bx;
+        const dy = ny - by;
+        const metric = shapeMetric(blob, dx, dy, t);
+        const core = Math.max(0, 1 - metric);
+        v += blob.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
+      }
+
+      if (pointer.active) {
+        const dx = nx - pointer.x;
+        const dy = ny - pointer.y;
+        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
+        const pointerCore = Math.max(0, 1 - pointerMetric);
+        v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+      }
+
+      const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
+      return v * 0.18 + ripple;
+    }
+
+    function interpolate(p0, p1, v0, v1, iso) {
+      const span = v1 - v0;
+      const t = Math.abs(span) < 0.00001 ? 0.5 : Math.min(1, Math.max(0, (iso - v0) / span));
+      return [
+        p0[0] + (p1[0] - p0[0]) * t,
+        p0[1] + (p1[1] - p0[1]) * t,
+      ];
+    }
+
+    function edgePoint(edge, p, v, iso) {
+      if (edge === 0) return interpolate(p[0], p[1], v[0], v[1], iso);
+      if (edge === 1) return interpolate(p[1], p[2], v[1], v[2], iso);
+      if (edge === 2) return interpolate(p[3], p[2], v[3], v[2], iso);
+      return interpolate(p[0], p[3], v[0], v[3], iso);
+    }
+
+    function estimateNormal(x, y, t) {
+      const h = Math.max(1.5, Number(cellEl.value) * dpr * 0.12);
+      const x0 = Math.max(0, x - h);
+      const x1 = Math.min(width, x + h);
+      const y0 = Math.max(0, y - h);
+      const y1 = Math.min(height, y + h);
+      const gx = sampleField(x1, y, t) - sampleField(x0, y, t);
+      const gy = sampleField(x, y1, t) - sampleField(x, y0, t);
+      const len = Math.hypot(gx, gy);
+      return len > 0.000001 ? [gx / len, gy / len] : [1, 0];
+    }
+
+    function solveQef(samples, bounds) {
+      let ata00 = 0;
+      let ata01 = 0;
+      let ata11 = 0;
+      let atb0 = 0;
+      let atb1 = 0;
+      let cx = 0;
+      let cy = 0;
+
+      for (const sample of samples) {
+        const [px, py, nx, ny] = sample;
+        const b = nx * px + ny * py;
+        ata00 += nx * nx;
+        ata01 += nx * ny;
+        ata11 += ny * ny;
+        atb0 += nx * b;
+        atb1 += ny * b;
+        cx += px;
+        cy += py;
+      }
+
+      cx /= samples.length;
+      cy /= samples.length;
+      const det = ata00 * ata11 - ata01 * ata01;
+      let x = cx;
+      let y = cy;
+
+      if (Math.abs(det) > 0.000001) {
+        x = (atb0 * ata11 - atb1 * ata01) / det;
+        y = (ata00 * atb1 - ata01 * atb0) / det;
+      }
+
+      if (x < bounds.x0 || x > bounds.x1 || y < bounds.y0 || y > bounds.y1) {
+        x = cx;
+        y = cy;
+      }
+
+      return [
+        Math.min(bounds.x1, Math.max(bounds.x0, x)),
+        Math.min(bounds.y1, Math.max(bounds.y0, y)),
+      ];
+    }
+
+    function buildFieldGrid(t) {
+      const cell = Number(cellEl.value) * dpr;
+      const iso = Number(isoEl.value);
+      const cols = Math.ceil(width / cell);
+      const rows = Math.ceil(height / cell);
+      const values = new Float32Array((cols + 1) * (rows + 1));
+
+      for (let y = 0; y <= rows; y++) {
+        for (let x = 0; x <= cols; x++) {
+          values[y * (cols + 1) + x] = sampleField(Math.min(width, x * cell), Math.min(height, y * cell), t);
+        }
+      }
+
+      return { cell, iso, cols, rows, values };
+    }
+
+    function buildMarchingSegments(field) {
+      const { cell, iso, cols, rows, values } = field;
+      const segments = [];
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const v = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+          const mask = (v[0] > iso ? 8 : 0) | (v[1] > iso ? 4 : 0) | (v[2] > iso ? 2 : 0) | (v[3] > iso ? 1 : 0);
+
+          for (const pair of edgePairs[mask]) {
+            const a = edgePoint(pair[0], p, v, iso);
+            const b = edgePoint(pair[1], p, v, iso);
+            const dx = a[0] - b[0];
+            const dy = a[1] - b[1];
+            if (dx * dx + dy * dy > 0.01) {
+              segments.push(a[0], a[1], b[0], b[1]);
+            }
+          }
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function buildDualSegments(field, t) {
+      const { cell, iso, cols, rows, values } = field;
+      const vertices = new Float32Array(cols * rows * 2);
+      const valid = new Uint8Array(cols * rows);
+      const segments = [];
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const v = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+          const mask = (v[0] > iso ? 8 : 0) | (v[1] > iso ? 4 : 0) | (v[2] > iso ? 2 : 0) | (v[3] > iso ? 1 : 0);
+          if (mask === 0 || mask === 15) continue;
+
+          const samples = [];
+          for (let edge = 0; edge < 4; edge++) {
+            const a = [0, 1, 3, 0][edge];
+            const b = [1, 2, 2, 3][edge];
+            if ((v[a] > iso) === (v[b] > iso)) continue;
+            const crossing = edgePoint(edge, p, v, iso);
+            const normal = estimateNormal(crossing[0], crossing[1], t);
+            samples.push([crossing[0], crossing[1], normal[0], normal[1]]);
+          }
+          if (samples.length === 0) continue;
+
+          const qefPoint = solveQef(samples, { x0, y0, x1, y1 });
+
+          const index = y * cols + x;
+          vertices[index * 2] = qefPoint[0];
+          vertices[index * 2 + 1] = qefPoint[1];
+          valid[index] = 1;
+        }
+      }
+
+      function pushConnection(a, b) {
+        if (!valid[a] || !valid[b]) return;
+        const ax = vertices[a * 2];
+        const ay = vertices[a * 2 + 1];
+        const bx = vertices[b * 2];
+        const by = vertices[b * 2 + 1];
+        const dx = ax - bx;
+        const dy = ay - by;
+        if (dx * dx + dy * dy > 0.01) {
+          segments.push(ax, ay, bx, by);
+        }
+      }
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 1; x < cols; x++) {
+          const top = y * (cols + 1) + x;
+          const bottom = (y + 1) * (cols + 1) + x;
+          if ((values[top] > iso) !== (values[bottom] > iso)) {
+            pushConnection(y * cols + x - 1, y * cols + x);
+          }
+        }
+      }
+
+      for (let y = 1; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const left = y * (cols + 1) + x;
+          const right = left + 1;
+          if ((values[left] > iso) !== (values[right] > iso)) {
+            pushConnection((y - 1) * cols + x, y * cols + x);
+          }
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function buildGridSegments() {
+      const cell = Number(cellEl.value) * dpr;
+      const segments = [];
+
+      for (let x = 0; x <= width + 0.5; x += cell) {
+        const gx = Math.min(width, x);
+        segments.push(gx, 0, gx, height);
+      }
+
+      for (let y = 0; y <= height + 0.5; y += cell) {
+        const gy = Math.min(height, y);
+        segments.push(0, gy, width, gy);
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function ensureSegmentBuffer(floatCount) {
+      if (segmentBuffer && floatCount <= segmentCapacity) return;
+      segmentCapacity = Math.max(floatCount, 1024);
+      segmentBuffer?.destroy();
+      segmentBuffer = device.createBuffer({
+        size: segmentCapacity * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      gridBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: gridUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      contourBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: contourUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      dualBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: dualUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+    }
+
+    function render(now) {
+      resize();
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+      if (!paused) phase += dt;
+
+      const gridSegments = buildGridSegments();
+      const field = buildFieldGrid(phase);
+      const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
+      const dualSegments = visible.contouring ? buildDualSegments(field, phase) : new Float32Array();
+      const combinedSegments = new Float32Array(gridSegments.length + segments.length + dualSegments.length);
+      combinedSegments.set(gridSegments);
+      combinedSegments.set(segments, gridSegments.length);
+      combinedSegments.set(dualSegments, gridSegments.length + segments.length);
+      ensureSegmentBuffer(Math.max(4, combinedSegments.length));
+      if (combinedSegments.length > 0) {
+        device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
+      }
+
+      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
+      const contourUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
+      const dualUniformData = new Float32Array([width, height, Math.max(1, 3 * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.9]);
+      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
+      device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
+      device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
+      device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
+      device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
+      device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
+
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: context.getCurrentTexture().createView(),
+          clearValue: { r: 0.04, g: 0.045, b: 0.055, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        }],
+      });
+      pass.setPipeline(backgroundPipeline);
+      pass.setBindGroup(0, backgroundBindGroup);
+      pass.draw(3);
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, gridBindGroup);
+      pass.draw(6, gridSegments.length / 4);
+      if (visible.marching) {
+        pass.setBindGroup(0, contourBindGroup);
+        pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
+      }
+      if (visible.contouring) {
+        pass.setBindGroup(0, dualBindGroup);
+        pass.draw(6, dualSegments.length / 4, 0, (gridSegments.length + segments.length) / 4);
+      }
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+
+      const msLabel = visible.marching ? `${segments.length / 4 | 0} ms` : "ms off";
+      const dcLabel = visible.contouring ? `${dualSegments.length / 4 | 0} dc` : "dc off";
+      statusEl.textContent = `${msLabel} / ${dcLabel}`;
+      requestAnimationFrame(render);
+    }
+
+    async function init() {
+      updateOutputs();
+      syncToggles();
+      shuffleBlobs();
+
+      if (!navigator.gpu) {
+        statusEl.textContent = "no webgpu";
+        statusEl.classList.add("error");
+        noteEl.textContent = "WebGPU is not available in this browser. Use a recent Chrome, Edge, or Safari Technology Preview build.";
+        return;
+      }
+
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        statusEl.textContent = "no adapter";
+        statusEl.classList.add("error");
+        noteEl.textContent = "No compatible GPU adapter was found.";
+        return;
+      }
+
+      device = await adapter.requestDevice();
+      context = canvas.getContext("webgpu");
+      presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+      context.configure({
+        device,
+        format: presentationFormat,
+        alphaMode: "opaque",
+      });
+
+      backgroundUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      blobBuffer = device.createBuffer({
+        size: 7 * 12 * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      gridUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      contourUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      dualUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+
+      const shaderModule = device.createShaderModule({ code: shaderCode });
+      const backgroundShaderModule = device.createShaderModule({ code: backgroundShaderCode });
+      pipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: shaderModule,
+          entryPoint: "vs",
+        },
+        fragment: {
+          module: shaderModule,
+          entryPoint: "fs",
+          targets: [{
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+      backgroundPipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: backgroundShaderModule,
+          entryPoint: "bgVs",
+        },
+        fragment: {
+          module: backgroundShaderModule,
+          entryPoint: "bgFs",
+          targets: [{
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+      backgroundBindGroup = device.createBindGroup({
+        layout: backgroundPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: backgroundUniformBuffer } },
+          { binding: 1, resource: { buffer: blobBuffer } },
+        ],
+      });
+
+      ensureSegmentBuffer(1024);
+      requestAnimationFrame(render);
+    }
+
+    for (const input of [isoEl, cellEl]) {
+      input.addEventListener("input", updateOutputs);
+    }
+
+    showMarchingEl.addEventListener("change", () => {
+      visible.marching = showMarchingEl.checked;
+    });
+
+    showContouringEl.addEventListener("change", () => {
+      visible.contouring = showContouringEl.checked;
+    });
+
+    pauseButton.addEventListener("click", () => {
+      paused = !paused;
+      pauseButton.textContent = paused ? "Resume" : "Pause";
+    });
+
+    shuffleButton.addEventListener("click", shuffleBlobs);
+
+    window.addEventListener("keydown", (event) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
+      if (event.key === "1") visible.marching = !visible.marching;
+      if (event.key === "2") visible.contouring = !visible.contouring;
+      syncToggles();
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = (event.clientX - rect.left) / rect.width;
+      pointer.y = (event.clientY - rect.top) / rect.height;
+      pointer.active = true;
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      pointer.active = false;
+    });
+
+    window.addEventListener("resize", resize);
+    init();
+  </script>
+</body>
+</html>
