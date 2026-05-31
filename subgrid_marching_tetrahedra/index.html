@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WebGPU Marching Triangle</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101216;
+      --panel: rgba(18, 22, 28, 0.86);
+      --panel-border: rgba(255, 255, 255, 0.12);
+      --text: #f2f5f8;
+      --muted: #aab4c0;
+      --accent: #42d8b4;
+      --danger: #ff6b6b;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        linear-gradient(120deg, rgba(66, 216, 180, 0.08), transparent 40%),
+        linear-gradient(300deg, rgba(240, 184, 79, 0.08), transparent 35%),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+      touch-action: none;
+    }
+
+    .hud {
+      position: fixed;
+      inset: 18px auto auto 18px;
+      width: min(360px, calc(100vw - 36px));
+      padding: 16px;
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+      backdrop-filter: blur(16px);
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status {
+      min-width: 170px;
+      color: var(--accent);
+      font-size: 12px;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .controls {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    output {
+      color: var(--text);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 2px;
+    }
+
+    button {
+      height: 36px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text);
+      font: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    button:hover {
+      border-color: rgba(66, 216, 180, 0.48);
+      background: rgba(66, 216, 180, 0.12);
+    }
+
+    .toggle-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      margin-top: 2px;
+    }
+
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 30px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toggle-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .swatch {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      border-radius: 3px;
+    }
+
+    .swatch-classic {
+      color: rgb(84, 255, 179);
+      background: currentColor;
+    }
+
+    .swatch-subgrid {
+      color: rgb(255, 199, 66);
+      background: currentColor;
+    }
+
+    .toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+    }
+
+    .note {
+      margin: 12px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .repo-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin-top: 8px;
+      color: rgba(170, 180, 192, 0.78);
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    .repo-link:hover {
+      color: var(--text);
+      text-decoration: underline;
+    }
+
+    .external-mark {
+      width: 11px;
+      height: 11px;
+      flex: 0 0 auto;
+      opacity: 0.82;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    @media (max-width: 640px) {
+      .hud {
+        inset: auto 12px 12px 12px;
+        width: auto;
+        padding: 10px 12px;
+      }
+
+      .title-row {
+        display: none;
+      }
+
+      .controls > label,
+      .button-row,
+      .note {
+        display: none;
+      }
+
+      .controls {
+        gap: 0;
+      }
+
+      .toggle-row {
+        gap: 4px;
+        margin-top: 0;
+      }
+
+      .toggle {
+        min-height: 24px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <section class="hud" aria-label="Marching triangle controls">
+    <div class="title-row">
+      <h1>Marching Triangle</h1>
+      <div class="status" id="status">starting</div>
+    </div>
+
+    <div class="controls">
+      <label>
+        <span class="label-row">
+          <span>Iso value</span>
+          <output id="isoOut">0.80</output>
+        </span>
+        <input id="iso" type="range" min="0.25" max="1.8" step="0.01" value="0.80" />
+      </label>
+
+      <label>
+        <span class="label-row">
+          <span>Cell size</span>
+          <output id="cellOut">18 px</output>
+        </span>
+        <input id="cell" type="range" min="8" max="42" step="1" value="18" />
+      </label>
+
+      <label>
+        <span class="label-row">
+          <span>Line width</span>
+          <output id="widthOut">3.0 px</output>
+        </span>
+        <input id="width" type="range" min="1" max="8" step="0.5" value="3" />
+      </label>
+
+      <label>
+        <span class="label-row">
+          <span>Edge samples</span>
+          <output id="samplesOut">8</output>
+        </span>
+        <input id="samples" type="range" min="1" max="32" step="1" value="8" />
+      </label>
+
+      <div class="button-row">
+        <button id="pause" type="button">Pause</button>
+        <button id="shuffle" type="button">Shuffle field</button>
+      </div>
+
+      <div class="toggle-row" aria-label="Display toggles">
+        <label class="toggle" for="showClassic">
+          <span class="toggle-name"><span class="swatch swatch-classic" aria-hidden="true"></span>Classic</span>
+          <input id="showClassic" type="checkbox" checked />
+        </label>
+        <label class="toggle" for="showSubgrid">
+          <span class="toggle-name"><span class="swatch swatch-subgrid" aria-hidden="true"></span>Subgrid</span>
+          <input id="showSubgrid" type="checkbox" checked />
+        </label>
+      </div>
+    </div>
+
+    <p class="note" id="note">1: Classic, 2: Subgrid. Classic samples triangle vertices only; Subgrid samples along each triangle edge.</p>
+    <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
+      <span>github.com/yknishidate/demos</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
+  </section>
+
+  <script type="module">
+    const canvas = document.querySelector("#canvas");
+    const statusEl = document.querySelector("#status");
+    const noteEl = document.querySelector("#note");
+    const isoEl = document.querySelector("#iso");
+    const cellEl = document.querySelector("#cell");
+    const widthEl = document.querySelector("#width");
+    const samplesEl = document.querySelector("#samples");
+    const isoOut = document.querySelector("#isoOut");
+    const cellOut = document.querySelector("#cellOut");
+    const widthOut = document.querySelector("#widthOut");
+    const samplesOut = document.querySelector("#samplesOut");
+    const pauseButton = document.querySelector("#pause");
+    const shuffleButton = document.querySelector("#shuffle");
+    const showClassicEl = document.querySelector("#showClassic");
+    const showSubgridEl = document.querySelector("#showSubgrid");
+
+    let device;
+    let context;
+    let pipeline;
+    let classicUniformBuffer;
+    let subgridUniformBuffer;
+    let gridUniformBuffer;
+    let segmentBuffer;
+    let classicBindGroup;
+    let subgridBindGroup;
+    let gridBindGroup;
+    let segmentCapacity = 0;
+    let presentationFormat;
+    let width = 1;
+    let height = 1;
+    let dpr = 1;
+    let paused = false;
+    let phase = 0;
+    let lastTime = performance.now();
+    let pointer = { x: 0.5, y: 0.5, active: false };
+    let sources = [];
+    const visible = {
+      classic: true,
+      subgrid: true,
+    };
+
+    const shaderCode = `
+struct Uniforms {
+  resolution: vec2f,
+  thickness: f32,
+  _pad: f32,
+  color: vec4f,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> segments: array<vec4f>;
+
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) local: vec2f,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOut {
+  let seg = segments[instanceIndex];
+  let a = seg.xy;
+  let b = seg.zw;
+  let dir = normalize(b - a);
+  let normal = vec2f(-dir.y, dir.x);
+  let corner = array<vec2f, 6>(
+    vec2f(0.0, -1.0),
+    vec2f(1.0, -1.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, -1.0),
+    vec2f(1.0, 1.0),
+    vec2f(0.0, 1.0)
+  )[vertexIndex];
+  let p = mix(a, b, corner.x) + normal * corner.y * uniforms.thickness * 0.5;
+  let clip = (p / uniforms.resolution) * vec2f(2.0, -2.0) + vec2f(-1.0, 1.0);
+
+  var out: VertexOut;
+  out.position = vec4f(clip, 0.0, 1.0);
+  out.local = corner;
+  return out;
+}
+
+@fragment
+fn fs(in: VertexOut) -> @location(0) vec4f {
+  let core = 1.0 - smoothstep(0.72, 1.0, abs(in.local.y));
+  let glow = 1.0 - smoothstep(0.95, 1.65, abs(in.local.y));
+  let tint = mix(uniforms.color.rgb * 0.82, uniforms.color.rgb, core);
+  return vec4f(tint, uniforms.color.a * max(core, glow * 0.45));
+}`;
+
+    function updateOutputs() {
+      isoOut.value = Number(isoEl.value).toFixed(2);
+      cellOut.value = `${cellEl.value} px`;
+      widthOut.value = `${Number(widthEl.value).toFixed(1)} px`;
+      samplesOut.value = samplesEl.value;
+    }
+
+    function syncToggles() {
+      showClassicEl.checked = visible.classic;
+      showSubgridEl.checked = visible.subgrid;
+    }
+
+    function shuffleSources() {
+      const shapes = ["circle", "square", "diamond", "block"];
+      sources = Array.from({ length: 7 }, (_, i) => ({
+        x: Math.random(),
+        y: Math.random(),
+        radius: 0.12 + Math.random() * 0.12,
+        speed: 0.35 + Math.random() * 0.85,
+        angle: Math.random() * Math.PI * 2,
+        drift: 0.08 + Math.random() * 0.16,
+        rotation: Math.random() * Math.PI,
+        aspect: 0.65 + Math.random() * 0.9,
+        shape: shapes[i % shapes.length],
+        weight: i % 3 === 0 ? 1.35 : 1.0,
+      }));
+    }
+
+    function resize() {
+      dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, Math.floor(rect.width * dpr));
+      height = Math.max(1, Math.floor(rect.height * dpr));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+    }
+
+    function shapeMetric(source, dx, dy, t) {
+      const canvasAspect = width / height;
+      const sx = dx * canvasAspect;
+      const sy = dy;
+      const turn = source.rotation + Math.sin(t * source.speed * 0.7 + source.angle) * 0.45;
+      const c = Math.cos(turn);
+      const s = Math.sin(turn);
+      const rx = (sx * c - sy * s) / source.radius;
+      const ry = (sx * s + sy * c) / (source.radius * source.aspect);
+      const ax = Math.abs(rx);
+      const ay = Math.abs(ry);
+
+      if (source.shape === "square") return Math.max(ax, ay);
+      if (source.shape === "diamond") return ax + ay;
+      if (source.shape === "block") return Math.max(ax / 1.45, ay / 0.58);
+      return Math.hypot(rx, ry);
+    }
+
+    function sampleField(x, y, t) {
+      const nx = x / width;
+      const ny = y / height;
+      let v = 0;
+
+      for (const source of sources) {
+        const bx = source.x + Math.cos(t * source.speed + source.angle) * source.drift;
+        const by = source.y + Math.sin(t * source.speed * 0.83 + source.angle * 1.7) * source.drift;
+        const metric = shapeMetric(source, nx - bx, ny - by, t);
+        const core = Math.max(0, 1 - metric);
+        v += source.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
+      }
+
+      if (pointer.active) {
+        const dx = nx - pointer.x;
+        const dy = ny - pointer.y;
+        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
+        const pointerCore = Math.max(0, 1 - pointerMetric);
+        v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+      }
+
+      const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
+      return v * 0.18 + ripple;
+    }
+
+    function interpolate(p0, p1, v0, v1, iso) {
+      const span = v1 - v0;
+      const t = Math.abs(span) < 0.00001 ? 0.5 : Math.min(1, Math.max(0, (iso - v0) / span));
+      return [
+        p0[0] + (p1[0] - p0[0]) * t,
+        p0[1] + (p1[1] - p0[1]) * t,
+      ];
+    }
+
+    function buildFieldGrid(t) {
+      const cell = Number(cellEl.value) * dpr;
+      const iso = Number(isoEl.value);
+      const cols = Math.ceil(width / cell);
+      const rows = Math.ceil(height / cell);
+      const values = new Float32Array((cols + 1) * (rows + 1));
+
+      for (let y = 0; y <= rows; y++) {
+        for (let x = 0; x <= cols; x++) {
+          values[y * (cols + 1) + x] = sampleField(Math.min(width, x * cell), Math.min(height, y * cell), t);
+        }
+      }
+
+      return { cell, iso, cols, rows, values };
+    }
+
+    function getTriangleSegment(points, values, iso) {
+      const crossings = [];
+      for (const [a, b] of [[0, 1], [1, 2], [2, 0]]) {
+        if ((values[a] > iso) !== (values[b] > iso)) {
+          crossings.push(interpolate(points[a], points[b], values[a], values[b], iso));
+        }
+      }
+
+      if (crossings.length !== 2) return null;
+      return [crossings[0][0], crossings[0][1], crossings[1][0], crossings[1][1]];
+    }
+
+    function findEdgeHits(a, b, iso, t, edgeSamples, edgeIndex) {
+      const hits = [];
+      let prevS = 0;
+      let prevValue = sampleField(a[0], a[1], t);
+
+      for (let i = 1; i <= edgeSamples; i++) {
+        const s = i / edgeSamples;
+        const x = a[0] + (b[0] - a[0]) * s;
+        const y = a[1] + (b[1] - a[1]) * s;
+        const value = sampleField(x, y, t);
+
+        if ((prevValue > iso) !== (value > iso)) {
+          const span = value - prevValue;
+          const u = Math.abs(span) < 0.00001 ? 0.5 : Math.min(1, Math.max(0, (iso - prevValue) / span));
+          const hitS = prevS + (s - prevS) * u;
+          const hitX = a[0] + (b[0] - a[0]) * hitS;
+          const hitY = a[1] + (b[1] - a[1]) * hitS;
+          const previousHit = hits[hits.length - 1];
+          if (!previousHit || Math.abs(previousHit.s - hitS) > 0.0001) {
+            hits.push({ edge: edgeIndex, s: hitS, x: hitX, y: hitY });
+          }
+        }
+
+        prevS = s;
+        prevValue = value;
+      }
+
+      return hits;
+    }
+
+    function buildSubgridTriangleSegments(points, iso, t, edgeSamples) {
+      const edgeHits = [
+        findEdgeHits(points[0], points[1], iso, t, edgeSamples, 0),
+        findEdgeHits(points[1], points[2], iso, t, edgeSamples, 1),
+        findEdgeHits(points[2], points[0], iso, t, edgeSamples, 2),
+      ];
+      const segments = [];
+
+      let totalHits = edgeHits[0].length + edgeHits[1].length + edgeHits[2].length;
+      if (totalHits < 2) return segments;
+
+      if (totalHits % 2 === 1) {
+        const longestEdge = edgeHits
+          .map((hits, edge) => ({ edge, count: hits.length }))
+          .sort((a, b) => b.count - a.count)[0].edge;
+        edgeHits[longestEdge].pop();
+        totalHits--;
+      }
+
+      const pools = edgeHits.map((hits) => hits.slice().sort((a, b) => a.s - b.s));
+      let e0 = pools[0].length;
+      let e1 = pools[1].length;
+      let e2 = pools[2].length;
+      let c0 = 0;
+      let c1 = 0;
+      let c2 = 0;
+
+      if (e0 > e1 + e2) {
+        c0 = e2;
+        c1 = e1;
+      } else if (e1 > e0 + e2) {
+        c1 = e0;
+        c2 = e2;
+      } else if (e2 > e0 + e1) {
+        c0 = e0;
+        c2 = e1;
+      } else {
+        c0 = (e0 + e2 - e1) / 2;
+        c1 = (e0 + e1 - e2) / 2;
+        c2 = (e1 + e2 - e0) / 2;
+      }
+
+      function pushSegment(a, b) {
+        if (!a || !b) return;
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        if (dx * dx + dy * dy > 0.01) {
+          segments.push(a.x, a.y, b.x, b.y);
+        }
+      }
+
+      for (let i = 0; i < c0; i++) {
+        pushSegment(pools[0].shift(), pools[2].pop());
+      }
+
+      for (let i = 0; i < c1; i++) {
+        pushSegment(pools[0].pop(), pools[1].shift());
+      }
+
+      for (let i = 0; i < c2; i++) {
+        pushSegment(pools[1].pop(), pools[2].shift());
+      }
+
+      for (const edgePool of pools) {
+        edgePool.sort((a, b) => a.s - b.s);
+        for (let i = 0; i + 1 < edgePool.length; i += 2) {
+          pushSegment(edgePool[i], edgePool[i + 1]);
+        }
+      }
+
+      return segments;
+    }
+
+    function buildMarchingTriangleSegments(field, mode) {
+      const { cell, iso, cols, rows, values } = field;
+      const segments = [];
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const v = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+
+          if (mode === "subgrid") {
+            const edgeSamples = Number(samplesEl.value);
+            segments.push(...buildSubgridTriangleSegments([p[0], p[1], p[2]], iso, phase, edgeSamples));
+            segments.push(...buildSubgridTriangleSegments([p[0], p[2], p[3]], iso, phase, edgeSamples));
+          } else {
+            const first = getTriangleSegment([p[0], p[1], p[2]], [v[0], v[1], v[2]], iso);
+            const second = getTriangleSegment([p[0], p[2], p[3]], [v[0], v[2], v[3]], iso);
+
+            if (first) segments.push(...first);
+            if (second) segments.push(...second);
+          }
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function buildTriangleGridSegments() {
+      const cell = Number(cellEl.value) * dpr;
+      const cols = Math.ceil(width / cell);
+      const rows = Math.ceil(height / cell);
+      const segments = [];
+
+      for (let x = 0; x <= cols; x++) {
+        const gx = Math.min(width, x * cell);
+        segments.push(gx, 0, gx, height);
+      }
+
+      for (let y = 0; y <= rows; y++) {
+        const gy = Math.min(height, y * cell);
+        segments.push(0, gy, width, gy);
+      }
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          segments.push(x0, y0, x1, y1);
+        }
+      }
+
+      return new Float32Array(segments);
+    }
+
+    function ensureSegmentBuffer(floatCount) {
+      if (segmentBuffer && floatCount <= segmentCapacity) return;
+      segmentCapacity = Math.max(floatCount, 1024);
+      segmentBuffer?.destroy();
+      segmentBuffer = device.createBuffer({
+        size: segmentCapacity * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
+      gridBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: gridUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      classicBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: classicUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      subgridBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: subgridUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+    }
+
+    function render(now) {
+      resize();
+      const dt = Math.min(0.05, (now - lastTime) / 1000);
+      lastTime = now;
+      if (!paused) phase += dt;
+
+      const gridSegments = buildTriangleGridSegments();
+      const field = buildFieldGrid(phase);
+      const classicSegments = visible.classic ? buildMarchingTriangleSegments(field, "classic") : new Float32Array();
+      const subgridSegments = visible.subgrid ? buildMarchingTriangleSegments(field, "subgrid") : new Float32Array();
+      const combinedSegments = new Float32Array(gridSegments.length + classicSegments.length + subgridSegments.length);
+      combinedSegments.set(gridSegments);
+      combinedSegments.set(classicSegments, gridSegments.length);
+      combinedSegments.set(subgridSegments, gridSegments.length + classicSegments.length);
+      ensureSegmentBuffer(Math.max(4, combinedSegments.length));
+      device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
+
+      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.13]);
+      const classicUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.66]);
+      const subgridUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.72]);
+      device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
+      device.queue.writeBuffer(classicUniformBuffer, 0, classicUniformData);
+      device.queue.writeBuffer(subgridUniformBuffer, 0, subgridUniformData);
+
+      const encoder = device.createCommandEncoder();
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{
+          view: context.getCurrentTexture().createView(),
+          clearValue: { r: 0.04, g: 0.045, b: 0.055, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        }],
+      });
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, gridBindGroup);
+      pass.draw(6, gridSegments.length / 4);
+      if (visible.classic) {
+        pass.setBindGroup(0, classicBindGroup);
+        pass.draw(6, classicSegments.length / 4, 0, gridSegments.length / 4);
+      }
+      if (visible.subgrid) {
+        pass.setBindGroup(0, subgridBindGroup);
+        pass.draw(6, subgridSegments.length / 4, 0, (gridSegments.length + classicSegments.length) / 4);
+      }
+      pass.end();
+      device.queue.submit([encoder.finish()]);
+
+      const classicLabel = visible.classic ? `${classicSegments.length / 4 | 0} classic` : "classic off";
+      const subgridLabel = visible.subgrid ? `${subgridSegments.length / 4 | 0} subgrid` : "subgrid off";
+      statusEl.textContent = `${classicLabel} / ${subgridLabel}`;
+      requestAnimationFrame(render);
+    }
+
+    async function init() {
+      updateOutputs();
+      syncToggles();
+      shuffleSources();
+
+      if (!navigator.gpu) {
+        statusEl.textContent = "no webgpu";
+        statusEl.classList.add("error");
+        noteEl.textContent = "WebGPU is not available in this browser. Use a recent Chrome, Edge, or Safari Technology Preview build.";
+        return;
+      }
+
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) {
+        statusEl.textContent = "no adapter";
+        statusEl.classList.add("error");
+        noteEl.textContent = "No compatible GPU adapter was found.";
+        return;
+      }
+
+      device = await adapter.requestDevice();
+      context = canvas.getContext("webgpu");
+      presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+      context.configure({
+        device,
+        format: presentationFormat,
+        alphaMode: "opaque",
+      });
+
+      gridUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      classicUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      subgridUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+
+      const shaderModule = device.createShaderModule({ code: shaderCode });
+      pipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: shaderModule,
+          entryPoint: "vs",
+        },
+        fragment: {
+          module: shaderModule,
+          entryPoint: "fs",
+          targets: [{
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+
+      ensureSegmentBuffer(1024);
+      requestAnimationFrame(render);
+    }
+
+    for (const input of [isoEl, cellEl, widthEl, samplesEl]) {
+      input.addEventListener("input", updateOutputs);
+    }
+
+    showClassicEl.addEventListener("change", () => {
+      visible.classic = showClassicEl.checked;
+    });
+
+    showSubgridEl.addEventListener("change", () => {
+      visible.subgrid = showSubgridEl.checked;
+    });
+
+    pauseButton.addEventListener("click", () => {
+      paused = !paused;
+      pauseButton.textContent = paused ? "Resume" : "Pause";
+    });
+
+    shuffleButton.addEventListener("click", shuffleSources);
+
+    window.addEventListener("keydown", (event) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
+      if (event.key === "1") visible.classic = !visible.classic;
+      if (event.key === "2") visible.subgrid = !visible.subgrid;
+      syncToggles();
+    });
+
+    canvas.addEventListener("pointermove", (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = (event.clientX - rect.left) / rect.width;
+      pointer.y = (event.clientY - rect.top) / rect.height;
+      pointer.active = true;
+    });
+
+    canvas.addEventListener("pointerleave", () => {
+      pointer.active = false;
+    });
+
+    window.addEventListener("resize", resize);
+    init();
+  </script>
+</body>
+</html>
