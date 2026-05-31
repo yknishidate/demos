@@ -294,14 +294,6 @@
     <div class="controls">
       <label>
         <span class="label-row">
-          <span>Iso value</span>
-          <output id="isoOut">0.80</output>
-        </span>
-        <input id="iso" type="range" min="0.25" max="1.8" step="0.01" value="0.80" />
-      </label>
-
-      <label>
-        <span class="label-row">
           <span>Cell size</span>
           <output id="cellOut">16 px</output>
         </span>
@@ -363,10 +355,8 @@
     const hudEl = document.querySelector("#hud");
     const statusEl = document.querySelector("#status");
     const noteEl = document.querySelector("#note");
-    const isoEl = document.querySelector("#iso");
     const cellEl = document.querySelector("#cell");
     const normalModeEl = document.querySelector("#normalMode");
-    const isoOut = document.querySelector("#isoOut");
     const cellOut = document.querySelector("#cellOut");
     const pauseButton = document.querySelector("#pause");
     const shuffleButton = document.querySelector("#shuffle");
@@ -504,59 +494,60 @@ struct BackgroundUniforms {
 @group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
 @group(0) @binding(1) var<storage, read> blobs: array<Blob, 7>;
 
-fn shapeMetric(blob: Blob, dx: f32, dy: f32) -> f32 {
-  let canvasAspect = uniforms.resolution.x / uniforms.resolution.y;
-  let sx = dx * canvasAspect;
-  let sy = dy;
-  let radius = blob.a.z;
+fn boxDistance(p: vec2f, halfSize: vec2f) -> f32 {
+  let q = abs(p) - halfSize;
+  return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0);
+}
+
+fn shapeSdf(blob: Blob, pixel: vec2f) -> f32 {
+  let minDim = min(uniforms.resolution.x, uniforms.resolution.y);
+  let center = vec2f(blob.a.x, blob.a.y) * uniforms.resolution;
+  let radius = blob.a.z * minDim;
   let speed = blob.a.w;
   let angle = blob.b.x;
   let rotation = blob.b.z;
   let aspect = blob.b.w;
   let shape = blob.c.x;
+  let drift = blob.b.y * minDim;
+  let animatedCenter = center + vec2f(
+    cos(uniforms.phase * speed + angle),
+    sin(uniforms.phase * speed * 0.83 + angle * 1.7)
+  ) * drift;
   let turn = rotation + sin(uniforms.phase * speed * 0.7 + angle) * 0.45;
   let c = cos(turn);
   let s = sin(turn);
-  let rx = (sx * c - sy * s) / radius;
-  let ry = (sx * s + sy * c) / (radius * aspect);
-  let ax = abs(rx);
-  let ay = abs(ry);
+  let d = pixel - animatedCenter;
+  let p = vec2f(d.x * c - d.y * s, d.x * s + d.y * c);
 
   if (shape < 0.5) {
-    return length(vec2f(rx, ry));
+    return radius - length(vec2f(p.x, p.y / aspect));
   }
   if (shape < 1.5) {
-    return max(ax, ay);
+    return -boxDistance(p, vec2f(radius, radius * aspect));
   }
   if (shape < 2.5) {
-    return ax + ay;
+    let diamond = (abs(p.x) + abs(p.y) / max(0.25, aspect)) * 0.70710678;
+    return radius - diamond;
   }
-  return max(ax / 1.45, ay / 0.58);
+  return -boxDistance(p, vec2f(radius * 1.45, radius * 0.58 * aspect));
 }
 
 fn sampleField(pixel: vec2f) -> f32 {
-  let n = pixel / uniforms.resolution;
-  var v = 0.0;
+  var sdf = -1.0e6;
 
   for (var i = 0u; i < 7u; i = i + 1u) {
     let blob = blobs[i];
-    let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
-    let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
-    let metric = shapeMetric(blob, n.x - bx, n.y - by);
-    let core = max(0.0, 1.0 - metric);
-    v = v + blob.c.y * (1.0 / (metric * metric + 0.22) + core * core * 1.6);
+    sdf = max(sdf, shapeSdf(blob, pixel));
   }
 
   if (uniforms.pointerActive > 0.5) {
-    let dx = n.x - uniforms.pointer.x;
-    let dy = n.y - uniforms.pointer.y;
-    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
-    let pointerCore = max(0.0, 1.0 - pointerMetric);
-    v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+    let minDim = min(uniforms.resolution.x, uniforms.resolution.y);
+    let pointerCenter = uniforms.pointer * uniforms.resolution;
+    let pointerSdf = -boxDistance(pixel - pointerCenter, vec2f(0.16 * minDim));
+    sdf = max(sdf, pointerSdf);
   }
 
-  let ripple = sin(n.x * 20.0 + uniforms.phase * 0.8) * cos(n.y * 16.0 - uniforms.phase * 0.7) * 0.045;
-  return v * 0.18 + ripple;
+  return sdf;
 }
 
 @vertex
@@ -572,7 +563,7 @@ fn bgVs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
 @fragment
 fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
   let field = sampleField(position.xy);
-  let band = 1.0 - smoothstep(0.0, 0.11, abs(field - uniforms.iso));
+  let band = 1.0 - smoothstep(0.0, 9.0, abs(field - uniforms.iso));
   if (field > uniforms.iso) {
     return vec4f(0.11, 0.50, 0.38, 0.51 + band * 0.21);
   }
@@ -580,7 +571,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 }`;
 
     function updateOutputs() {
-      isoOut.value = Number(isoEl.value).toFixed(2);
       cellOut.value = `${cellEl.value} px`;
     }
 
@@ -623,7 +613,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.2 + Math.random() * 0.12,
+        radius: 0.1 + Math.random() * 0.06,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
         drift: 0.08 + Math.random() * 0.16,
@@ -645,49 +635,46 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       }
     }
 
-    function shapeMetric(blob, dx, dy, t) {
-      const canvasAspect = width / height;
-      const sx = dx * canvasAspect;
-      const sy = dy;
+    function boxDistance(px, py, hx, hy) {
+      const qx = Math.abs(px) - hx;
+      const qy = Math.abs(py) - hy;
+      return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0);
+    }
+
+    function shapeSdf(blob, x, y, t) {
+      const minDim = Math.min(width, height);
+      const cx = blob.x * width + Math.cos(t * blob.speed + blob.angle) * blob.drift * minDim;
+      const cy = blob.y * height + Math.sin(t * blob.speed * 0.83 + blob.angle * 1.7) * blob.drift * minDim;
+      const radius = blob.radius * minDim;
       const turn = blob.rotation + Math.sin(t * blob.speed * 0.7 + blob.angle) * 0.45;
       const c = Math.cos(turn);
       const s = Math.sin(turn);
-      const rx = (sx * c - sy * s) / blob.radius;
-      const ry = (sx * s + sy * c) / (blob.radius * blob.aspect);
-      const ax = Math.abs(rx);
-      const ay = Math.abs(ry);
+      const dx = x - cx;
+      const dy = y - cy;
+      const px = dx * c - dy * s;
+      const py = dx * s + dy * c;
 
-      if (blob.shape === "square") return Math.max(ax, ay);
-      if (blob.shape === "diamond") return ax + ay;
-      if (blob.shape === "block") return Math.max(ax / 1.45, ay / 0.58);
-      return Math.hypot(rx, ry);
+      if (blob.shape === "square") return -boxDistance(px, py, radius, radius * blob.aspect);
+      if (blob.shape === "diamond") return radius - (Math.abs(px) + Math.abs(py) / Math.max(0.25, blob.aspect)) * Math.SQRT1_2;
+      if (blob.shape === "block") return -boxDistance(px, py, radius * 1.45, radius * 0.58 * blob.aspect);
+      return radius - Math.hypot(px, py / blob.aspect);
     }
 
     function sampleField(x, y, t) {
-      const nx = x / width;
-      const ny = y / height;
-      let v = 0;
+      let sdf = -1e6;
 
       for (const blob of blobs) {
-        const bx = blob.x + Math.cos(t * blob.speed + blob.angle) * blob.drift;
-        const by = blob.y + Math.sin(t * blob.speed * 0.83 + blob.angle * 1.7) * blob.drift;
-        const dx = nx - bx;
-        const dy = ny - by;
-        const metric = shapeMetric(blob, dx, dy, t);
-        const core = Math.max(0, 1 - metric);
-        v += blob.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
+        sdf = Math.max(sdf, shapeSdf(blob, x, y, t));
       }
 
       if (pointer.active) {
-        const dx = nx - pointer.x;
-        const dy = ny - pointer.y;
-        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
-        const pointerCore = Math.max(0, 1 - pointerMetric);
-        v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+        const minDim = Math.min(width, height);
+        const dx = x - pointer.x * width;
+        const dy = y - pointer.y * height;
+        sdf = Math.max(sdf, -boxDistance(dx, dy, 0.16 * minDim, 0.16 * minDim));
       }
 
-      const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
-      return v * 0.18 + ripple;
+      return sdf;
     }
 
     function interpolate(p0, p1, v0, v1, iso) {
@@ -774,7 +761,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     function buildFieldGrid(t) {
       const cell = Number(cellEl.value) * dpr;
-      const iso = Number(isoEl.value);
+      const iso = 0;
       const cols = Math.ceil(width / cell);
       const rows = Math.ceil(height / cell);
       const values = new Float32Array((cols + 1) * (rows + 1));
@@ -984,9 +971,23 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const dx = c.x - a.x;
       const dy = c.y - a.y;
       const u = (dx * r.y - dy * r.x) / denom;
+      if (u < 0 || u > 1) return null;
       return {
-        x: c.x + s.x * Math.min(1, Math.max(0, u)),
-        y: c.y + s.y * Math.min(1, Math.max(0, u)),
+        x: c.x + s.x * u,
+        y: c.y + s.y * u,
+      };
+    }
+
+    function closestPointOnSegment(p, a, b) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const lengthSq = dx * dx + dy * dy;
+      if (lengthSq < 0.000001) return { x: a.x, y: a.y, t: 0 };
+      const t = Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSq));
+      return {
+        x: a.x + dx * t,
+        y: a.y + dy * t,
+        t,
       };
     }
 
@@ -1075,11 +1076,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       }
 
       const narrowBand = cell * 2.5;
-      const distanceWeight = 0.22;
+      const distanceWeight = 0.12;
       const hermiteWeight = 0.02;
-      const regularizationWeight = 0.004;
-      const hermiteUpdateWeight = 0.35;
-      const outerIterations = 7;
+      const regularizationWeight = 0.018;
+      const hermiteUpdateWeight = 0.18;
+      const vertexDamping = 0.46;
+      const maxVertexMove = cell * 0.28;
+      const outerIterations = 9;
 
       function gatherCellSamples(cellInfo) {
         const samples = [];
@@ -1090,9 +1093,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             if (seen.has(key)) continue;
             seen.add(key);
             const value = values[gy * (cols + 1) + gx];
-            const gradient = fieldGradientAtGridVertex(gx, gy, field);
-            const gradientLength = Math.max(0.0008, Math.hypot(gradient[0], gradient[1]));
-            const signedDistance = (value - iso) / gradientLength;
+            const signedDistance = value - iso;
             if (Math.abs(signedDistance) > narrowBand) continue;
             const p = gridVertexPoint(gx, gy, field);
             samples.push({ x: p.x, y: p.y, distance: Math.abs(signedDistance) });
@@ -1117,23 +1118,52 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           }
 
           for (const sample of gatherCellSamples(cellInfo)) {
-            const dx = cellInfo.v.x - sample.x;
-            const dy = cellInfo.v.y - sample.y;
+            const samplePoint = { x: sample.x, y: sample.y };
+            let best = null;
+            for (const edgeIndex of cellInfo.hermites) {
+              const hermite = edges[edgeIndex];
+              const closest = closestPointOnSegment(samplePoint, cellInfo.v, hermite.p);
+              const dx = closest.x - sample.x;
+              const dy = closest.y - sample.y;
+              const distanceSq = dx * dx + dy * dy;
+              if (!best || distanceSq < best.distanceSq) {
+                best = { closest, hermite, distanceSq };
+              }
+            }
+            if (!best) continue;
+
+            const dx = best.closest.x - sample.x;
+            const dy = best.closest.y - sample.y;
             const length = Math.hypot(dx, dy);
             if (length < 0.0001) continue;
             const nx = dx / length;
             const ny = dy / length;
+            const vertexCoeff = 1 - best.closest.t;
+            if (vertexCoeff < 0.08) continue;
+            const b = (sample.distance + nx * sample.x + ny * sample.y - best.closest.t * (nx * best.hermite.p.x + ny * best.hermite.p.y)) / vertexCoeff;
             constraints.push({
               nx,
               ny,
-              b: nx * sample.x + ny * sample.y + sample.distance,
-              w: distanceWeight,
+              b,
+              w: distanceWeight * vertexCoeff * vertexCoeff,
             });
           }
 
           constraints.push({ nx: 1, ny: 0, b: cellInfo.v.x, w: regularizationWeight });
           constraints.push({ nx: 0, ny: 1, b: cellInfo.v.y, w: regularizationWeight });
-          cellInfo.v = solveWeightedConstraints(constraints, cellInfo.v, cellInfo.bounds);
+          const previous = cellInfo.v;
+          const solved = solveWeightedConstraints(constraints, previous, cellInfo.bounds);
+          let dx = solved.x - previous.x;
+          let dy = solved.y - previous.y;
+          const length = Math.hypot(dx, dy);
+          if (length > maxVertexMove) {
+            dx *= maxVertexMove / length;
+            dy *= maxVertexMove / length;
+          }
+          cellInfo.v = {
+            x: Math.min(cellInfo.bounds.x1, Math.max(cellInfo.bounds.x0, previous.x + dx * vertexDamping)),
+            y: Math.min(cellInfo.bounds.y1, Math.max(cellInfo.bounds.y0, previous.y + dy * vertexDamping)),
+          };
         }
 
         for (const edge of edges) {
@@ -1332,7 +1362,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteDebugUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.15), 0, 1.0, 0.42, 0.67, 0.78]);
       const normalDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.78, 0.86, 1.0, 0.62]);
       const sampleDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 1.0, 0.92, 0.45, 0.58]);
-      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
+      const backgroundUniformData = new Float32Array([width, height, 0, phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
       device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
@@ -1512,7 +1542,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       requestAnimationFrame(render);
     }
 
-    for (const input of [isoEl, cellEl]) {
+    for (const input of [cellEl]) {
       input.addEventListener("input", updateOutputs);
     }
 
