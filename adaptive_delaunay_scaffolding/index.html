@@ -300,7 +300,7 @@
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold. ADS debug shows initial Poisson points, Delaunay edges, and crossing edges.</p>
+    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold. ADS debug refines long crossing edges with a small barrier test.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -354,6 +354,7 @@
     let crossingUniformBuffer;
     let insidePointUniformBuffer;
     let outsidePointUniformBuffer;
+    let insertedPointUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
     let backgroundBindGroup;
@@ -362,6 +363,7 @@
     let crossingBindGroup;
     let insidePointBindGroup;
     let outsidePointBindGroup;
+    let insertedPointBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
@@ -375,6 +377,8 @@
     let blobs = [];
     let scaffold = null;
     let scaffoldKey = "";
+    let scaffoldDebugCache = null;
+    let scaffoldDebugKey = "";
     const visible = {
       marching: true,
       ads: true,
@@ -862,8 +866,118 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const key = `${width}:${height}:${radius.toFixed(2)}:${blobs.length}`;
       if (scaffold && scaffoldKey === key) return scaffold;
       scaffoldKey = key;
-      scaffold = buildDelaunay(poissonDiskPoints(radius));
+      const points = poissonDiskPoints(radius).map((p) => ({ ...p, generation: 0 }));
+      scaffold = { points };
       return scaffold;
+    }
+
+    function classifyPoints(points, t, iso) {
+      return points.map((p) => sampleField(p.x, p.y, t) > iso);
+    }
+
+    function edgeLength(a, b) {
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    }
+
+    function refinedPointForEdge(a, b, signs, t, iso, delta) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const length = Math.hypot(dx, dy);
+      if (length < 0.0001) return null;
+
+      const ux = dx / length;
+      const uy = dy / length;
+      const mx = (a.x + b.x) * 0.5;
+      const my = (a.y + b.y) * 0.5;
+      const l = {
+        x: Math.min(width, Math.max(0, mx - ux * delta)),
+        y: Math.min(height, Math.max(0, my - uy * delta)),
+      };
+      const r = {
+        x: Math.min(width, Math.max(0, mx + ux * delta)),
+        y: Math.min(height, Math.max(0, my + uy * delta)),
+      };
+
+      if ((sampleField(l.x, l.y, t) > iso) === (sampleField(r.x, r.y, t) > iso)) {
+        return { x: mx, y: my };
+      }
+
+      const midInside = sampleField(mx, my, t) > iso;
+      const nearA = midInside !== signs.a;
+      const near = nearA ? a : b;
+      const other = nearA ? b : a;
+      const ndx = other.x - near.x;
+      const ndy = other.y - near.y;
+      const nlen = Math.hypot(ndx, ndy) || 1;
+      return {
+        x: Math.min(width, Math.max(0, near.x + (ndx / nlen) * delta)),
+        y: Math.min(height, Math.max(0, near.y + (ndy / nlen) * delta)),
+      };
+    }
+
+    function addUniquePoint(points, seen, p, generation) {
+      const key = `${Math.round(p.x * 4)}:${Math.round(p.y * 4)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      points.push({ x: p.x, y: p.y, generation });
+      return true;
+    }
+
+    function buildRefinedScaffold(t) {
+      const base = ensureScaffoldBase();
+      const iso = Number(isoEl.value);
+      const epsilon = Math.max(8 * dpr, Number(cellEl.value) * dpr);
+      const delta = Math.max(2.5 * dpr, epsilon * 0.18);
+      const maxIterations = 3;
+      const maxNewPointsPerIteration = 96;
+      const seen = new Set();
+      const points = base.points.map((p) => {
+        seen.add(`${Math.round(p.x * 4)}:${Math.round(p.y * 4)}`);
+        return { ...p };
+      });
+      let longCrossingCount = 0;
+      let insertedCount = 0;
+      let delaunay = null;
+      let signs = [];
+
+      for (let iteration = 0; iteration < maxIterations; iteration++) {
+        delaunay = buildDelaunay(points);
+        signs = classifyPoints(delaunay.points, t, iso);
+        const candidates = [];
+
+        for (const [aIndex, bIndex] of delaunay.edges) {
+          if (signs[aIndex] === signs[bIndex]) continue;
+          const a = delaunay.points[aIndex];
+          const b = delaunay.points[bIndex];
+          const length = edgeLength(a, b);
+          if (length <= epsilon) continue;
+          candidates.push({ aIndex, bIndex, length });
+        }
+
+        longCrossingCount = candidates.length;
+        if (candidates.length === 0) break;
+
+        candidates.sort((a, b) => b.length - a.length);
+        let addedThisIteration = 0;
+        for (const candidate of candidates.slice(0, maxNewPointsPerIteration)) {
+          const a = delaunay.points[candidate.aIndex];
+          const b = delaunay.points[candidate.bIndex];
+          const point = refinedPointForEdge(a, b, {
+            a: signs[candidate.aIndex],
+            b: signs[candidate.bIndex],
+          }, t, iso, delta);
+          if (!point) continue;
+          if (addUniquePoint(points, seen, point, iteration + 1)) {
+            addedThisIteration++;
+            insertedCount++;
+          }
+        }
+        if (addedThisIteration === 0) break;
+      }
+
+      delaunay = buildDelaunay(points);
+      signs = classifyPoints(delaunay.points, t, iso);
+      return { ...delaunay, signs, epsilon, delta, insertedCount, longCrossingCount };
     }
 
     function pushPointMarker(segments, x, y, size) {
@@ -872,14 +986,15 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     }
 
     function buildScaffoldDebugSegments(t) {
-      const base = ensureScaffoldBase();
-      const iso = Number(isoEl.value);
-      const signs = base.points.map((p) => sampleField(p.x, p.y, t) > iso);
+      const base = buildRefinedScaffold(t);
+      const signs = base.signs;
       const scaffoldSegments = [];
       const crossingSegments = [];
       const insidePointSegments = [];
       const outsidePointSegments = [];
+      const insertedPointSegments = [];
       const markerSize = Math.max(3, dpr * 3.5);
+      const refinedMarkerSize = Math.max(4, dpr * 5);
 
       for (const [a, b] of base.edges) {
         const pa = base.points[a];
@@ -893,6 +1008,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       for (let i = 0; i < base.points.length; i++) {
         const p = base.points[i];
         pushPointMarker(signs[i] ? insidePointSegments : outsidePointSegments, p.x, p.y, markerSize);
+        if (p.generation > 0) {
+          pushPointMarker(insertedPointSegments, p.x, p.y, refinedMarkerSize);
+        }
       }
 
       return {
@@ -900,10 +1018,35 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         crossingSegments: new Float32Array(crossingSegments),
         insidePointSegments: new Float32Array(insidePointSegments),
         outsidePointSegments: new Float32Array(outsidePointSegments),
+        insertedPointSegments: new Float32Array(insertedPointSegments),
         pointCount: base.points.length,
         triangleCount: base.triangles.length,
         crossingCount: crossingSegments.length / 4,
+        insertedCount: base.insertedCount,
+        longCrossingCount: base.longCrossingCount,
       };
+    }
+
+    function getScaffoldDebugSegments(t) {
+      ensureScaffoldBase();
+      const phaseBucket = Math.floor(t * 5);
+      const pointerX = pointer.active ? Math.round(pointer.x * 80) : -1;
+      const pointerY = pointer.active ? Math.round(pointer.y * 80) : -1;
+      const key = [
+        width,
+        height,
+        cellEl.value,
+        isoEl.value,
+        phaseBucket,
+        pointer.active ? 1 : 0,
+        pointerX,
+        pointerY,
+        scaffoldKey,
+      ].join(":");
+      if (scaffoldDebugCache && scaffoldDebugKey === key) return scaffoldDebugCache;
+      scaffoldDebugKey = key;
+      scaffoldDebugCache = buildScaffoldDebugSegments(t);
+      return scaffoldDebugCache;
     }
 
     function ensureSegmentBuffer(floatCount) {
@@ -956,6 +1099,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      insertedPointBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: insertedPointUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -967,26 +1117,31 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const gridSegments = buildGridSegments();
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
-      const scaffoldDebug = visible.ads ? buildScaffoldDebugSegments(phase) : {
+      const scaffoldDebug = visible.ads ? getScaffoldDebugSegments(phase) : {
         scaffoldSegments: new Float32Array(),
         crossingSegments: new Float32Array(),
         insidePointSegments: new Float32Array(),
         outsidePointSegments: new Float32Array(),
+        insertedPointSegments: new Float32Array(),
         pointCount: 0,
         triangleCount: 0,
         crossingCount: 0,
+        insertedCount: 0,
+        longCrossingCount: 0,
       };
       const scaffoldOffset = gridSegments.length + segments.length;
       const crossingOffset = scaffoldOffset + scaffoldDebug.scaffoldSegments.length;
       const insidePointOffset = crossingOffset + scaffoldDebug.crossingSegments.length;
       const outsidePointOffset = insidePointOffset + scaffoldDebug.insidePointSegments.length;
-      const combinedSegments = new Float32Array(outsidePointOffset + scaffoldDebug.outsidePointSegments.length);
+      const insertedPointOffset = outsidePointOffset + scaffoldDebug.outsidePointSegments.length;
+      const combinedSegments = new Float32Array(insertedPointOffset + scaffoldDebug.insertedPointSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
       combinedSegments.set(scaffoldDebug.scaffoldSegments, scaffoldOffset);
       combinedSegments.set(scaffoldDebug.crossingSegments, crossingOffset);
       combinedSegments.set(scaffoldDebug.insidePointSegments, insidePointOffset);
       combinedSegments.set(scaffoldDebug.outsidePointSegments, outsidePointOffset);
+      combinedSegments.set(scaffoldDebug.insertedPointSegments, insertedPointOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
         device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
@@ -998,6 +1153,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const crossingUniformData = new Float32Array([width, height, Math.max(1.5, Number(widthEl.value) * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88]);
       const insidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.30, 1.0, 0.62, 0.76]);
       const outsidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.45, 0.58, 1.0, 0.70]);
+      const insertedPointUniformData = new Float32Array([width, height, Math.max(1.8, dpr * 2.0), 0, 1.0, 0.33, 0.64, 0.86]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(marchingUniformBuffer, 0, marchingUniformData);
@@ -1005,6 +1161,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       device.queue.writeBuffer(crossingUniformBuffer, 0, crossingUniformData);
       device.queue.writeBuffer(insidePointUniformBuffer, 0, insidePointUniformData);
       device.queue.writeBuffer(outsidePointUniformBuffer, 0, outsidePointUniformData);
+      device.queue.writeBuffer(insertedPointUniformBuffer, 0, insertedPointUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
 
@@ -1036,13 +1193,15 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.draw(6, scaffoldDebug.insidePointSegments.length / 4, 0, insidePointOffset / 4);
         pass.setBindGroup(0, outsidePointBindGroup);
         pass.draw(6, scaffoldDebug.outsidePointSegments.length / 4, 0, outsidePointOffset / 4);
+        pass.setBindGroup(0, insertedPointBindGroup);
+        pass.draw(6, scaffoldDebug.insertedPointSegments.length / 4, 0, insertedPointOffset / 4);
       }
       pass.end();
       device.queue.submit([encoder.finish()]);
 
       const marchingLabel = visible.marching ? `${segments.length / 4 | 0} mc` : "mc off";
       const adsLabel = visible.ads
-        ? `${scaffoldDebug.pointCount} pts / ${scaffoldDebug.triangleCount} tri / ${scaffoldDebug.crossingCount | 0} cross`
+        ? `${scaffoldDebug.pointCount} pts / +${scaffoldDebug.insertedCount} / ${scaffoldDebug.crossingCount | 0} cross`
         : "ads off";
       statusEl.textContent = `${marchingLabel} / ${adsLabel}`;
       requestAnimationFrame(render);
@@ -1109,6 +1268,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
+      insertedPointUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
 
       const shaderModule = device.createShaderModule({ code: shaderCode });
       const backgroundShaderModule = device.createShaderModule({ code: backgroundShaderCode });
@@ -1172,6 +1335,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     cellEl.addEventListener("input", () => {
       scaffold = null;
+      scaffoldDebugCache = null;
     });
 
     showMarchingEl.addEventListener("change", () => {
@@ -1190,6 +1354,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     shuffleButton.addEventListener("click", () => {
       shuffleBlobs();
       scaffold = null;
+      scaffoldDebugCache = null;
     });
 
     window.addEventListener("keydown", (event) => {
@@ -1212,9 +1377,14 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     canvas.addEventListener("pointerleave", () => {
       pointer.active = false;
+      scaffoldDebugCache = null;
     });
 
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", () => {
+      scaffold = null;
+      scaffoldDebugCache = null;
+      resize();
+    });
     init();
   </script>
 </body>
