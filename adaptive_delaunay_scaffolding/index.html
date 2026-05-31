@@ -1114,7 +1114,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       lastTime = now;
       if (!paused) phase += dt;
 
-      const gridSegments = buildGridSegments();
+      const gridSegments = visible.marching ? buildGridSegments() : new Float32Array();
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const scaffoldDebug = visible.ads ? getScaffoldDebugSegments(phase) : {
@@ -1178,8 +1178,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       pass.setBindGroup(0, backgroundBindGroup);
       pass.draw(3);
       pass.setPipeline(pipeline);
-      pass.setBindGroup(0, gridBindGroup);
-      pass.draw(6, gridSegments.length / 4);
+      if (visible.marching) {
+        pass.setBindGroup(0, gridBindGroup);
+        pass.draw(6, gridSegments.length / 4);
+      }
       if (visible.marching) {
         pass.setBindGroup(0, marchingBindGroup);
         pass.draw(6, segments.length / 4, 0, gridSegments.length / 4);
