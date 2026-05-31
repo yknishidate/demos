@@ -368,11 +368,6 @@
     let blobBuffer;
     let marchingUniformBuffer;
     let scaffoldUniformBuffer;
-    let crossingUniformBuffer;
-    let insidePointUniformBuffer;
-    let outsidePointUniformBuffer;
-    let insertedPointUniformBuffer;
-    let crossingSampleUniformBuffer;
     let adsContourUniformBuffer;
     let gridUniformBuffer;
     let boundaryUniformBuffer;
@@ -380,11 +375,6 @@
     let backgroundBindGroup;
     let marchingBindGroup;
     let scaffoldBindGroup;
-    let crossingBindGroup;
-    let insidePointBindGroup;
-    let outsidePointBindGroup;
-    let insertedPointBindGroup;
-    let crossingSampleBindGroup;
     let adsContourBindGroup;
     let gridBindGroup;
     let boundaryBindGroup;
@@ -994,8 +984,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const iso = Number(isoEl.value);
       const epsilon = Number(cellEl.value) * dpr * 0.05;
       const delta = Math.max(0.5 * dpr, epsilon * 0.18);
-      const maxIterations = 8;
-      const maxNewPointsPerIteration = 384;
+      const maxIterations = 6;
+      const maxNewPointsPerIteration = 256;
       const seen = new Set();
       const points = base.points.map((p) => {
         seen.add(`${Math.round(p.x * 4)}:${Math.round(p.y * 4)}`);
@@ -1053,35 +1043,22 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       return { ...delaunay, signs, epsilon, delta, insertedCount, longCrossingCount };
     }
 
-    function pushPointMarker(segments, x, y, size) {
-      segments.push(x - size, y, x + size, y);
-      segments.push(x, y - size, x, y + size);
-    }
-
     function buildScaffoldDebugSegments(t) {
       const base = buildRefinedScaffold(t);
       const signs = base.signs;
       const refinedDelaunaySegments = [];
-      const crossingSegments = [];
-      const insidePointSegments = [];
-      const outsidePointSegments = [];
-      const insertedPointSegments = [];
-      const crossingSampleSegments = [];
       const adsContourSegments = [];
       const crossingSamples = new Map();
-      const markerSize = Math.max(3, dpr * 3.5);
-      const refinedMarkerSize = Math.max(2.5, dpr * 3.2);
-      const sampleMarkerSize = Math.max(2.5, dpr * 3.0);
+      let crossingCount = 0;
 
       for (const [a, b] of base.edges) {
         const pa = base.points[a];
         const pb = base.points[b];
         refinedDelaunaySegments.push(pa.x, pa.y, pb.x, pb.y);
         if (signs[a] !== signs[b]) {
-          crossingSegments.push(pa.x, pa.y, pb.x, pb.y);
+          crossingCount++;
           const sample = findCrossingPoint(pa, pb, signs[a], t, Number(isoEl.value));
           crossingSamples.set(edgeKey(a, b), sample);
-          pushPointMarker(crossingSampleSegments, sample.x, sample.y, sampleMarkerSize);
         }
       }
 
@@ -1103,27 +1080,14 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         }
       }
 
-      for (let i = 0; i < base.points.length; i++) {
-        const p = base.points[i];
-        pushPointMarker(signs[i] ? insidePointSegments : outsidePointSegments, p.x, p.y, markerSize);
-        if (p.generation > 0) {
-          pushPointMarker(insertedPointSegments, p.x, p.y, refinedMarkerSize);
-        }
-      }
-
       return {
         refinedDelaunaySegments: new Float32Array(refinedDelaunaySegments),
-        crossingSegments: new Float32Array(crossingSegments),
-        insidePointSegments: new Float32Array(insidePointSegments),
-        outsidePointSegments: new Float32Array(outsidePointSegments),
-        insertedPointSegments: new Float32Array(insertedPointSegments),
-        crossingSampleSegments: new Float32Array(crossingSampleSegments),
         adsContourSegments: new Float32Array(adsContourSegments),
         pointCount: base.points.length,
         edgeCount: refinedDelaunaySegments.length / 4,
         triangleCount: base.triangles.length,
-        crossingCount: crossingSegments.length / 4,
-        sampleCount: crossingSampleSegments.length / 8,
+        crossingCount,
+        sampleCount: crossingSamples.size,
         contourCount: adsContourSegments.length / 4,
         insertedCount: base.insertedCount,
         longCrossingCount: base.longCrossingCount,
@@ -1132,7 +1096,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     function getScaffoldDebugSegments(t) {
       ensureScaffoldBase();
-      const phaseBucket = Math.floor(t * 5);
+      const phaseBucket = Math.floor(t * 2);
       const key = [
         width,
         height,
@@ -1176,41 +1140,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
-      crossingBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: crossingUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
-      insidePointBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: insidePointUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
-      outsidePointBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: outsidePointUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
-      insertedPointBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: insertedPointUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
-      crossingSampleBindGroup = device.createBindGroup({
-        layout: pipeline.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: crossingSampleUniformBuffer } },
-          { binding: 1, resource: { buffer: segmentBuffer } },
-        ],
-      });
       adsContourBindGroup = device.createBindGroup({
         layout: pipeline.getBindGroupLayout(0),
         entries: [
@@ -1238,11 +1167,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const scaffoldDebug = visible.ads ? getScaffoldDebugSegments(phase) : {
         refinedDelaunaySegments: new Float32Array(),
-        crossingSegments: new Float32Array(),
-        insidePointSegments: new Float32Array(),
-        outsidePointSegments: new Float32Array(),
-        insertedPointSegments: new Float32Array(),
-        crossingSampleSegments: new Float32Array(),
         adsContourSegments: new Float32Array(),
         pointCount: 0,
         edgeCount: 0,
@@ -1255,22 +1179,12 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       };
       const boundarySegments = visible.split ? new Float32Array([width * 0.5, 0, width * 0.5, height]) : new Float32Array();
       const scaffoldOffset = gridSegments.length + segments.length;
-      const crossingOffset = scaffoldOffset + scaffoldDebug.refinedDelaunaySegments.length;
-      const insidePointOffset = crossingOffset + scaffoldDebug.crossingSegments.length;
-      const outsidePointOffset = insidePointOffset + scaffoldDebug.insidePointSegments.length;
-      const insertedPointOffset = outsidePointOffset + scaffoldDebug.outsidePointSegments.length;
-      const crossingSampleOffset = insertedPointOffset + scaffoldDebug.insertedPointSegments.length;
-      const adsContourOffset = crossingSampleOffset + scaffoldDebug.crossingSampleSegments.length;
+      const adsContourOffset = scaffoldOffset + scaffoldDebug.refinedDelaunaySegments.length;
       const boundaryOffset = adsContourOffset + scaffoldDebug.adsContourSegments.length;
       const combinedSegments = new Float32Array(boundaryOffset + boundarySegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
       combinedSegments.set(scaffoldDebug.refinedDelaunaySegments, scaffoldOffset);
-      combinedSegments.set(scaffoldDebug.crossingSegments, crossingOffset);
-      combinedSegments.set(scaffoldDebug.insidePointSegments, insidePointOffset);
-      combinedSegments.set(scaffoldDebug.outsidePointSegments, outsidePointOffset);
-      combinedSegments.set(scaffoldDebug.insertedPointSegments, insertedPointOffset);
-      combinedSegments.set(scaffoldDebug.crossingSampleSegments, crossingSampleOffset);
       combinedSegments.set(scaffoldDebug.adsContourSegments, adsContourOffset);
       combinedSegments.set(boundarySegments, boundaryOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
@@ -1284,22 +1198,12 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16, marchingClip[0], marchingClip[1], 0, 0]);
       const marchingUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95, marchingClip[0], marchingClip[1], 0, 0]);
       const scaffoldUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.05), 0, 0.56, 0.64, 0.72, 0.20, adsClip[0], adsClip[1], 0, 0]);
-      const crossingUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88, adsClip[0], adsClip[1], 0, 0]);
-      const insidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.30, 1.0, 0.62, 0.76, adsClip[0], adsClip[1], 0, 0]);
-      const outsidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.45, 0.58, 1.0, 0.70, adsClip[0], adsClip[1], 0, 0]);
-      const insertedPointUniformData = new Float32Array([width, height, Math.max(1.8, dpr * 2.0), 0, 1.0, 0.33, 0.64, 0.86, adsClip[0], adsClip[1], 0, 0]);
-      const crossingSampleUniformData = new Float32Array([width, height, Math.max(1.6, dpr * 1.8), 0, 0.97, 0.98, 0.88, 0.92, adsClip[0], adsClip[1], 0, 0]);
       const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94, adsClip[0], adsClip[1], 0, 0]);
       const boundaryUniformData = new Float32Array([width, height, Math.max(1, dpr * 2), 0, 0.92, 0.96, 1.0, 0.62, fullClip[0], fullClip[1], 0, 0]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, 0.5, 0.5, 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(marchingUniformBuffer, 0, marchingUniformData);
       device.queue.writeBuffer(scaffoldUniformBuffer, 0, scaffoldUniformData);
-      device.queue.writeBuffer(crossingUniformBuffer, 0, crossingUniformData);
-      device.queue.writeBuffer(insidePointUniformBuffer, 0, insidePointUniformData);
-      device.queue.writeBuffer(outsidePointUniformBuffer, 0, outsidePointUniformData);
-      device.queue.writeBuffer(insertedPointUniformBuffer, 0, insertedPointUniformData);
-      device.queue.writeBuffer(crossingSampleUniformBuffer, 0, crossingSampleUniformData);
       device.queue.writeBuffer(adsContourUniformBuffer, 0, adsContourUniformData);
       device.queue.writeBuffer(boundaryUniformBuffer, 0, boundaryUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
@@ -1329,16 +1233,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (visible.ads) {
         pass.setBindGroup(0, scaffoldBindGroup);
         pass.draw(6, scaffoldDebug.refinedDelaunaySegments.length / 4, 0, scaffoldOffset / 4);
-        // pass.setBindGroup(0, crossingBindGroup);
-        // pass.draw(6, scaffoldDebug.crossingSegments.length / 4, 0, crossingOffset / 4);
-        // pass.setBindGroup(0, insidePointBindGroup);
-        // pass.draw(6, scaffoldDebug.insidePointSegments.length / 4, 0, insidePointOffset / 4);
-        // pass.setBindGroup(0, outsidePointBindGroup);
-        // pass.draw(6, scaffoldDebug.outsidePointSegments.length / 4, 0, outsidePointOffset / 4);
-        // pass.setBindGroup(0, insertedPointBindGroup);
-        // pass.draw(6, scaffoldDebug.insertedPointSegments.length / 4, 0, insertedPointOffset / 4);
-        // pass.setBindGroup(0, crossingSampleBindGroup);
-        // pass.draw(6, scaffoldDebug.crossingSampleSegments.length / 4, 0, crossingSampleOffset / 4);
         pass.setBindGroup(0, adsContourBindGroup);
         pass.draw(6, scaffoldDebug.adsContourSegments.length / 4, 0, adsContourOffset / 4);
       }
@@ -1404,26 +1298,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       scaffoldUniformBuffer = device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      crossingUniformBuffer = device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      insidePointUniformBuffer = device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      outsidePointUniformBuffer = device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      insertedPointUniformBuffer = device.createBuffer({
-        size: 48,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-      crossingSampleUniformBuffer = device.createBuffer({
         size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
