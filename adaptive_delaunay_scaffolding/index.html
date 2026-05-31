@@ -69,11 +69,13 @@
     }
 
     .status {
-      min-width: 172px;
+      max-width: 148px;
       color: var(--accent);
       font-size: 11px;
       text-align: right;
       white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .controls {
@@ -1348,11 +1350,12 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       pass.end();
       device.queue.submit([encoder.finish()]);
 
-      const marchingLabel = visible.marching ? `${segments.length / 4 | 0} mc` : "mc off";
+      const marchingLabel = visible.marching ? `M${segments.length / 4 | 0}` : "M-";
       const adsLabel = visible.ads
-        ? `${scaffoldDebug.edgeCount | 0} edges / ${scaffoldDebug.contourCount | 0} ads / ${scaffoldDebug.longCrossingCount | 0} long`
-        : "ads off";
-      statusEl.textContent = `${marchingLabel} / ${adsLabel}`;
+        ? `A${scaffoldDebug.contourCount | 0} L${scaffoldDebug.longCrossingCount | 0}`
+        : "A-";
+      const splitLabel = visible.split ? "S" : "O";
+      statusEl.textContent = `${marchingLabel} ${adsLabel} ${splitLabel}`;
       requestAnimationFrame(render);
     }
 
