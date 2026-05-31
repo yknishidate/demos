@@ -1009,7 +1009,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (Math.abs(denom) < 0.000001) return null;
       const dx = c.x - a.x;
       const dy = c.y - a.y;
+      const t = (dx * s.y - dy * s.x) / denom;
       const u = (dx * r.y - dy * r.x) / denom;
+      if (t < 0 || t > 1) return null;
       if (u < 0 || u > 1) return null;
       return {
         x: c.x + s.x * u,
@@ -1074,6 +1076,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           p: { x: pointArray[0], y: pointArray[1] },
           n: { x: normalArray[0], y: normalArray[1] },
           endpoints,
+          normalSum: { x: normalArray[0], y: normalArray[1] },
+          normalCount: 1,
           cells: [],
           signs: [localValues[a] > iso, localValues[b] > iso],
         });
@@ -1106,6 +1110,19 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             const b = cornerB[edge];
             if ((localValues[a] > iso) === (localValues[b] > iso)) continue;
             const edgeIndex = getEdge(x, y, edge, p, localValues, bounds);
+            const crossing = edges[edgeIndex].p;
+            const normal = estimateBilinearNormal(crossing.x, crossing.y, bounds, localValues);
+            const edgeInfo = edges[edgeIndex];
+            if (edgeInfo.cells.length > 0) {
+              edgeInfo.normalSum.x += normal[0];
+              edgeInfo.normalSum.y += normal[1];
+              edgeInfo.normalCount++;
+              const normalLength = Math.hypot(edgeInfo.normalSum.x, edgeInfo.normalSum.y) || 1;
+              edgeInfo.n = {
+                x: edgeInfo.normalSum.x / normalLength,
+                y: edgeInfo.normalSum.y / normalLength,
+              };
+            }
             hermites.push(edgeIndex);
             edges[edgeIndex].cells.push(index);
           }
