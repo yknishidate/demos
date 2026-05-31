@@ -1120,6 +1120,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           vx /= hermites.length;
           vy /= hermites.length;
           cells[index] = {
+            index,
             x,
             y,
             bounds,
@@ -1156,7 +1157,70 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         return samples;
       }
 
+      function containingCellIndex(p) {
+        const x = Math.min(cols - 1, Math.max(0, Math.floor(p.x / cell)));
+        const y = Math.min(rows - 1, Math.max(0, Math.floor(p.y / cell)));
+        return cellIndex(x, y, cols);
+      }
+
+      function buildGlobalContourSegments() {
+        const contour = [];
+        for (const edge of edges) {
+          const adjacent = edge.cells.map((index) => cells[index]).filter(Boolean);
+          if (adjacent.length < 2) continue;
+          contour.push({
+            a: adjacent[0].v,
+            b: adjacent[1].v,
+            aCell: adjacent[0].index,
+            bCell: adjacent[1].index,
+          });
+        }
+        return contour;
+      }
+
+      function assignSamplesToCells() {
+        const assignments = Array.from({ length: cells.length }, () => []);
+        const contour = buildGlobalContourSegments();
+        if (contour.length === 0) return assignments;
+
+        for (let gy = 0; gy <= rows; gy++) {
+          for (let gx = 0; gx <= cols; gx++) {
+            const value = values[gy * (cols + 1) + gx];
+            const signedDistance = value - iso;
+            if (Math.abs(signedDistance) > narrowBand) continue;
+
+            const samplePoint = gridVertexPoint(gx, gy, field);
+            let best = null;
+            for (const segment of contour) {
+              const closest = closestPointOnSegment(samplePoint, segment.a, segment.b);
+              const dx = closest.x - samplePoint.x;
+              const dy = closest.y - samplePoint.y;
+              const distanceSq = dx * dx + dy * dy;
+              if (!best || distanceSq < best.distanceSq) {
+                best = { segment, closest, distanceSq };
+              }
+            }
+            if (!best) continue;
+
+            let targetCell = containingCellIndex(best.closest);
+            if (!cells[targetCell]) {
+              targetCell = best.closest.t < 0.5 ? best.segment.aCell : best.segment.bCell;
+            }
+            if (!cells[targetCell]) continue;
+
+            assignments[targetCell].push({
+              x: samplePoint.x,
+              y: samplePoint.y,
+              distance: Math.abs(signedDistance),
+            });
+          }
+        }
+
+        return assignments;
+      }
+
       for (let iteration = 0; iteration < outerIterations; iteration++) {
+        const sampleAssignments = assignSamplesToCells();
         for (const cellInfo of cells) {
           if (!cellInfo) continue;
           const constraints = [];
@@ -1171,7 +1235,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             });
           }
 
-          for (const sample of gatherCellSamples(cellInfo)) {
+          for (const sample of sampleAssignments[cellInfo.index]) {
             const samplePoint = { x: sample.x, y: sample.y };
             let best = null;
             for (const edgeIndex of cellInfo.hermites) {
