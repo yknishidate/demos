@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DCS-DD</title>
+  <title>DCSDD</title>
   <style>
     :root {
       color-scheme: dark;
@@ -186,6 +186,16 @@
       background: currentColor;
     }
 
+    .swatch-dcsdd {
+      color: rgb(173, 155, 255);
+      background: currentColor;
+    }
+
+    .swatch-debug {
+      color: rgb(255, 122, 170);
+      background: currentColor;
+    }
+
     .toggle input {
       width: 16px;
       height: 16px;
@@ -277,7 +287,7 @@
       </svg>
     </button>
     <div class="title-row">
-      <h1>DCS-DD</h1>
+      <h1>DCSDD</h1>
       <div class="status" id="status">starting</div>
     </div>
 
@@ -322,10 +332,22 @@
           <span class="toggle-name"><span class="swatch swatch-dc" aria-hidden="true"></span>Dual Contouring</span>
           <input id="showContouring" type="checkbox" checked />
         </label>
+        <label class="toggle" for="showDcsdd">
+          <span class="toggle-name"><span class="swatch swatch-dcsdd" aria-hidden="true"></span>DCSDD</span>
+          <input id="showDcsdd" type="checkbox" checked />
+        </label>
+        <label class="toggle" for="debugHermite">
+          <span class="toggle-name"><span class="swatch swatch-debug" aria-hidden="true"></span>Hermite debug</span>
+          <input id="debugHermite" type="checkbox" />
+        </label>
+        <label class="toggle" for="debugSamples">
+          <span class="toggle-name">SDF samples debug</span>
+          <input id="debugSamples" type="checkbox" />
+        </label>
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring. Grid-only estimates DC normals from bilinear cell interpolation.</p>
+    <p class="note" id="note">1: Marching Squares, 2: Dual Contouring, 3: DCSDD. DCSDD uses grid samples only and refines Hermite data iteratively.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -350,6 +372,9 @@
     const shuffleButton = document.querySelector("#shuffle");
     const showMarchingEl = document.querySelector("#showMarching");
     const showContouringEl = document.querySelector("#showContouring");
+    const showDcsddEl = document.querySelector("#showDcsdd");
+    const debugHermiteEl = document.querySelector("#debugHermite");
+    const debugSamplesEl = document.querySelector("#debugSamples");
     const compactUiEl = document.querySelector("#compactUi");
 
     const edgePairs = [
@@ -379,11 +404,19 @@
     let blobBuffer;
     let contourUniformBuffer;
     let dualUniformBuffer;
+    let dcsddUniformBuffer;
+    let hermiteDebugUniformBuffer;
+    let normalDebugUniformBuffer;
+    let sampleDebugUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
     let backgroundBindGroup;
     let contourBindGroup;
     let dualBindGroup;
+    let dcsddBindGroup;
+    let hermiteDebugBindGroup;
+    let normalDebugBindGroup;
+    let sampleDebugBindGroup;
     let gridBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
@@ -398,6 +431,9 @@
     const visible = {
       marching: true,
       contouring: true,
+      dcsdd: true,
+      hermiteDebug: false,
+      sampleDebug: false,
     };
     setupCompactUi({ hud: hudEl, button: compactUiEl });
 
@@ -551,6 +587,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function syncToggles() {
       showMarchingEl.checked = visible.marching;
       showContouringEl.checked = visible.contouring;
+      showDcsddEl.checked = visible.dcsdd;
+      debugHermiteEl.checked = visible.hermiteDebug;
+      debugSamplesEl.checked = visible.sampleDebug;
     }
 
     function shapeId(shape) {
@@ -584,7 +623,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.15 + Math.random() * 0.12,
+        radius: 0.2 + Math.random() * 0.12,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
         drift: 0.08 + Math.random() * 0.16,
@@ -864,6 +903,315 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       return new Float32Array(segments);
     }
 
+    function cellIndex(x, y, cols) {
+      return y * cols + x;
+    }
+
+    function crossingEdgeKey(x, y, edge) {
+      if (edge === 0) return `h:${y}:${x}`;
+      if (edge === 1) return `v:${y}:${x + 1}`;
+      if (edge === 2) return `h:${y + 1}:${x}`;
+      return `v:${y}:${x}`;
+    }
+
+    function gridVertexPoint(gx, gy, field) {
+      return {
+        x: Math.min(width, gx * field.cell),
+        y: Math.min(height, gy * field.cell),
+      };
+    }
+
+    function fieldGradientAtGridVertex(gx, gy, field) {
+      const { cell, cols, rows, values } = field;
+      const x0 = Math.max(0, gx - 1);
+      const x1 = Math.min(cols, gx + 1);
+      const y0 = Math.max(0, gy - 1);
+      const y1 = Math.min(rows, gy + 1);
+      const vx0 = values[gy * (cols + 1) + x0];
+      const vx1 = values[gy * (cols + 1) + x1];
+      const vy0 = values[y0 * (cols + 1) + gx];
+      const vy1 = values[y1 * (cols + 1) + gx];
+      const dx = Math.max(0.0001, (x1 - x0) * cell);
+      const dy = Math.max(0.0001, (y1 - y0) * cell);
+      return [(vx1 - vx0) / dx, (vy1 - vy0) / dy];
+    }
+
+    function edgeEndpointsForCell(x, y, edge, field) {
+      if (edge === 0) return [gridVertexPoint(x, y, field), gridVertexPoint(x + 1, y, field)];
+      if (edge === 1) return [gridVertexPoint(x + 1, y, field), gridVertexPoint(x + 1, y + 1, field)];
+      if (edge === 2) return [gridVertexPoint(x, y + 1, field), gridVertexPoint(x + 1, y + 1, field)];
+      return [gridVertexPoint(x, y, field), gridVertexPoint(x, y + 1, field)];
+    }
+
+    function solveWeightedConstraints(constraints, fallback, bounds) {
+      let ata00 = 0;
+      let ata01 = 0;
+      let ata11 = 0;
+      let atb0 = 0;
+      let atb1 = 0;
+
+      for (const constraint of constraints) {
+        const w = constraint.w;
+        const nx = constraint.nx;
+        const ny = constraint.ny;
+        const b = constraint.b;
+        ata00 += w * nx * nx;
+        ata01 += w * nx * ny;
+        ata11 += w * ny * ny;
+        atb0 += w * nx * b;
+        atb1 += w * ny * b;
+      }
+
+      const det = ata00 * ata11 - ata01 * ata01;
+      let x = fallback.x;
+      let y = fallback.y;
+      if (Math.abs(det) > 0.000001) {
+        x = (atb0 * ata11 - atb1 * ata01) / det;
+        y = (ata00 * atb1 - ata01 * atb0) / det;
+      }
+
+      return {
+        x: Math.min(bounds.x1, Math.max(bounds.x0, x)),
+        y: Math.min(bounds.y1, Math.max(bounds.y0, y)),
+      };
+    }
+
+    function lineIntersection(a, b, c, d) {
+      const r = { x: b.x - a.x, y: b.y - a.y };
+      const s = { x: d.x - c.x, y: d.y - c.y };
+      const denom = r.x * s.y - r.y * s.x;
+      if (Math.abs(denom) < 0.000001) return null;
+      const dx = c.x - a.x;
+      const dy = c.y - a.y;
+      const u = (dx * r.y - dy * r.x) / denom;
+      return {
+        x: c.x + s.x * Math.min(1, Math.max(0, u)),
+        y: c.y + s.y * Math.min(1, Math.max(0, u)),
+      };
+    }
+
+    function addCrossSegments(out, x, y, size) {
+      out.push(x - size, y, x + size, y);
+      out.push(x, y - size, x, y + size);
+    }
+
+    function buildDcsddSegments(field) {
+      const { cell, iso, cols, rows, values } = field;
+      const edges = [];
+      const edgeMap = new Map();
+      const cells = Array.from({ length: cols * rows }, () => null);
+      const cornerA = [0, 1, 3, 0];
+      const cornerB = [1, 2, 2, 3];
+
+      function getEdge(x, y, edge, p, localValues, bounds) {
+        const key = crossingEdgeKey(x, y, edge);
+        let index = edgeMap.get(key);
+        if (index !== undefined) return index;
+
+        const a = cornerA[edge];
+        const b = cornerB[edge];
+        const pointArray = edgePoint(edge, p, localValues, iso);
+        const normalArray = estimateBilinearNormal(pointArray[0], pointArray[1], bounds, localValues);
+        const endpoints = edgeEndpointsForCell(x, y, edge, field);
+        index = edges.length;
+        edgeMap.set(key, index);
+        edges.push({
+          key,
+          p: { x: pointArray[0], y: pointArray[1] },
+          n: { x: normalArray[0], y: normalArray[1] },
+          endpoints,
+          cells: [],
+          signs: [localValues[a] > iso, localValues[b] > iso],
+        });
+        return index;
+      }
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          const x0 = x * cell;
+          const y0 = y * cell;
+          const x1 = Math.min(width, x0 + cell);
+          const y1 = Math.min(height, y0 + cell);
+          const p = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+          const i = y * (cols + 1) + x;
+          const localValues = [
+            values[i],
+            values[i + 1],
+            values[i + cols + 2],
+            values[i + cols + 1],
+          ];
+          const mask = (localValues[0] > iso ? 8 : 0) | (localValues[1] > iso ? 4 : 0) | (localValues[2] > iso ? 2 : 0) | (localValues[3] > iso ? 1 : 0);
+          if (mask === 0 || mask === 15) continue;
+
+          const index = cellIndex(x, y, cols);
+          const hermites = [];
+          const bounds = { x0, y0, x1, y1 };
+          for (let edge = 0; edge < 4; edge++) {
+            const a = cornerA[edge];
+            const b = cornerB[edge];
+            if ((localValues[a] > iso) === (localValues[b] > iso)) continue;
+            const edgeIndex = getEdge(x, y, edge, p, localValues, bounds);
+            hermites.push(edgeIndex);
+            edges[edgeIndex].cells.push(index);
+          }
+
+          if (hermites.length === 0) continue;
+          let vx = 0;
+          let vy = 0;
+          for (const edgeIndex of hermites) {
+            vx += edges[edgeIndex].p.x;
+            vy += edges[edgeIndex].p.y;
+          }
+          vx /= hermites.length;
+          vy /= hermites.length;
+          cells[index] = {
+            x,
+            y,
+            bounds,
+            hermites,
+            v: { x: vx, y: vy },
+          };
+        }
+      }
+
+      const narrowBand = cell * 2.5;
+      const distanceWeight = 0.22;
+      const hermiteWeight = 0.02;
+      const regularizationWeight = 0.004;
+      const hermiteUpdateWeight = 0.35;
+      const outerIterations = 7;
+
+      function gatherCellSamples(cellInfo) {
+        const samples = [];
+        const seen = new Set();
+        for (let gy = Math.max(0, cellInfo.y - 1); gy <= Math.min(rows, cellInfo.y + 2); gy++) {
+          for (let gx = Math.max(0, cellInfo.x - 1); gx <= Math.min(cols, cellInfo.x + 2); gx++) {
+            const key = `${gx}:${gy}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const value = values[gy * (cols + 1) + gx];
+            const gradient = fieldGradientAtGridVertex(gx, gy, field);
+            const gradientLength = Math.max(0.0008, Math.hypot(gradient[0], gradient[1]));
+            const signedDistance = (value - iso) / gradientLength;
+            if (Math.abs(signedDistance) > narrowBand) continue;
+            const p = gridVertexPoint(gx, gy, field);
+            samples.push({ x: p.x, y: p.y, distance: Math.abs(signedDistance) });
+          }
+        }
+        return samples;
+      }
+
+      for (let iteration = 0; iteration < outerIterations; iteration++) {
+        for (const cellInfo of cells) {
+          if (!cellInfo) continue;
+          const constraints = [];
+
+          for (const edgeIndex of cellInfo.hermites) {
+            const hermite = edges[edgeIndex];
+            constraints.push({
+              nx: hermite.n.x,
+              ny: hermite.n.y,
+              b: hermite.n.x * hermite.p.x + hermite.n.y * hermite.p.y,
+              w: hermiteWeight,
+            });
+          }
+
+          for (const sample of gatherCellSamples(cellInfo)) {
+            const dx = cellInfo.v.x - sample.x;
+            const dy = cellInfo.v.y - sample.y;
+            const length = Math.hypot(dx, dy);
+            if (length < 0.0001) continue;
+            const nx = dx / length;
+            const ny = dy / length;
+            constraints.push({
+              nx,
+              ny,
+              b: nx * sample.x + ny * sample.y + sample.distance,
+              w: distanceWeight,
+            });
+          }
+
+          constraints.push({ nx: 1, ny: 0, b: cellInfo.v.x, w: regularizationWeight });
+          constraints.push({ nx: 0, ny: 1, b: cellInfo.v.y, w: regularizationWeight });
+          cellInfo.v = solveWeightedConstraints(constraints, cellInfo.v, cellInfo.bounds);
+        }
+
+        for (const edge of edges) {
+          const adjacent = edge.cells.map((index) => cells[index]).filter(Boolean);
+          if (adjacent.length < 2) continue;
+          const a = adjacent[0].v;
+          const b = adjacent[1].v;
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const length = Math.hypot(dx, dy);
+          if (length < 0.0001) continue;
+          let nx = -dy / length;
+          let ny = dx / length;
+          if (nx * edge.n.x + ny * edge.n.y < 0) {
+            nx = -nx;
+            ny = -ny;
+          }
+          const intersection = lineIntersection(a, b, edge.endpoints[0], edge.endpoints[1]) ?? edge.p;
+          edge.p = {
+            x: edge.p.x * (1 - hermiteUpdateWeight) + intersection.x * hermiteUpdateWeight,
+            y: edge.p.y * (1 - hermiteUpdateWeight) + intersection.y * hermiteUpdateWeight,
+          };
+          const blendedNormal = {
+            x: edge.n.x * (1 - hermiteUpdateWeight) + nx * hermiteUpdateWeight,
+            y: edge.n.y * (1 - hermiteUpdateWeight) + ny * hermiteUpdateWeight,
+          };
+          const normalLength = Math.hypot(blendedNormal.x, blendedNormal.y) || 1;
+          edge.n = {
+            x: blendedNormal.x / normalLength,
+            y: blendedNormal.y / normalLength,
+          };
+        }
+      }
+
+      const contourSegments = [];
+      for (const edge of edges) {
+        const adjacent = edge.cells.map((index) => cells[index]).filter(Boolean);
+        if (adjacent.length < 2) continue;
+        const a = adjacent[0].v;
+        const b = adjacent[1].v;
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        if (dx * dx + dy * dy > 0.01) {
+          contourSegments.push(a.x, a.y, b.x, b.y);
+        }
+      }
+
+      const hermiteSegments = [];
+      const normalSegments = [];
+      const sampleSegments = [];
+      const cross = Math.max(1.5, dpr * 1.8);
+      const normalScale = cell * 0.34;
+      for (const edge of edges) {
+        addCrossSegments(hermiteSegments, edge.p.x, edge.p.y, cross);
+        normalSegments.push(edge.p.x, edge.p.y, edge.p.x + edge.n.x * normalScale, edge.p.y + edge.n.y * normalScale);
+      }
+
+      const sampleSeen = new Set();
+      for (const cellInfo of cells) {
+        if (!cellInfo) continue;
+        for (const sample of gatherCellSamples(cellInfo)) {
+          const key = `${Math.round(sample.x)}:${Math.round(sample.y)}`;
+          if (sampleSeen.has(key) || sampleSeen.size > 420) continue;
+          sampleSeen.add(key);
+          addCrossSegments(sampleSegments, sample.x, sample.y, Math.max(1, dpr * 1.1));
+        }
+      }
+
+      return {
+        contourSegments: new Float32Array(contourSegments),
+        hermiteSegments: new Float32Array(hermiteSegments),
+        normalSegments: new Float32Array(normalSegments),
+        sampleSegments: new Float32Array(sampleSegments),
+        cellCount: cells.reduce((count, cellInfo) => count + (cellInfo ? 1 : 0), 0),
+        edgeCount: edges.length,
+      };
+    }
+
     function buildGridSegments() {
       const cell = Number(cellEl.value) * dpr;
       const segments = [];
@@ -910,6 +1258,34 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      dcsddBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: dcsddUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      hermiteDebugBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: hermiteDebugUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      normalDebugBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: normalDebugUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
+      sampleDebugBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: sampleDebugUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -922,10 +1298,28 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const dualSegments = visible.contouring ? buildDualSegments(field, phase) : new Float32Array();
-      const combinedSegments = new Float32Array(gridSegments.length + segments.length + dualSegments.length);
+      const dcsdd = visible.dcsdd || visible.hermiteDebug || visible.sampleDebug
+        ? buildDcsddSegments(field)
+        : {
+            contourSegments: new Float32Array(),
+            hermiteSegments: new Float32Array(),
+            normalSegments: new Float32Array(),
+            sampleSegments: new Float32Array(),
+            cellCount: 0,
+            edgeCount: 0,
+          };
+      const dcsddOffset = gridSegments.length + segments.length + dualSegments.length;
+      const hermiteOffset = dcsddOffset + dcsdd.contourSegments.length;
+      const normalOffset = hermiteOffset + dcsdd.hermiteSegments.length;
+      const sampleOffset = normalOffset + dcsdd.normalSegments.length;
+      const combinedSegments = new Float32Array(sampleOffset + dcsdd.sampleSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
       combinedSegments.set(dualSegments, gridSegments.length + segments.length);
+      combinedSegments.set(dcsdd.contourSegments, dcsddOffset);
+      combinedSegments.set(dcsdd.hermiteSegments, hermiteOffset);
+      combinedSegments.set(dcsdd.normalSegments, normalOffset);
+      combinedSegments.set(dcsdd.sampleSegments, sampleOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
         device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
@@ -934,10 +1328,18 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
       const contourUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
       const dualUniformData = new Float32Array([width, height, Math.max(1, 3 * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.9]);
+      const dcsddUniformData = new Float32Array([width, height, Math.max(1, 3 * dpr * 0.62), 0, 0.68, 0.60, 1.0, 0.9]);
+      const hermiteDebugUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.15), 0, 1.0, 0.42, 0.67, 0.78]);
+      const normalDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.78, 0.86, 1.0, 0.62]);
+      const sampleDebugUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 1.0, 0.92, 0.45, 0.58]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
       device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
+      device.queue.writeBuffer(dcsddUniformBuffer, 0, dcsddUniformData);
+      device.queue.writeBuffer(hermiteDebugUniformBuffer, 0, hermiteDebugUniformData);
+      device.queue.writeBuffer(normalDebugUniformBuffer, 0, normalDebugUniformData);
+      device.queue.writeBuffer(sampleDebugUniformBuffer, 0, sampleDebugUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
 
@@ -964,12 +1366,27 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.setBindGroup(0, dualBindGroup);
         pass.draw(6, dualSegments.length / 4, 0, (gridSegments.length + segments.length) / 4);
       }
+      if (visible.dcsdd) {
+        pass.setBindGroup(0, dcsddBindGroup);
+        pass.draw(6, dcsdd.contourSegments.length / 4, 0, dcsddOffset / 4);
+      }
+      if (visible.hermiteDebug) {
+        pass.setBindGroup(0, hermiteDebugBindGroup);
+        pass.draw(6, dcsdd.hermiteSegments.length / 4, 0, hermiteOffset / 4);
+        pass.setBindGroup(0, normalDebugBindGroup);
+        pass.draw(6, dcsdd.normalSegments.length / 4, 0, normalOffset / 4);
+      }
+      if (visible.sampleDebug) {
+        pass.setBindGroup(0, sampleDebugBindGroup);
+        pass.draw(6, dcsdd.sampleSegments.length / 4, 0, sampleOffset / 4);
+      }
       pass.end();
       device.queue.submit([encoder.finish()]);
 
       const msLabel = visible.marching ? `${segments.length / 4 | 0} ms` : "ms off";
       const dcLabel = visible.contouring ? `${dualSegments.length / 4 | 0} dc` : "dc off";
-      statusEl.textContent = `${msLabel} / ${dcLabel}`;
+      const dcsddLabel = visible.dcsdd ? `${dcsdd.contourSegments.length / 4 | 0} ds` : "ds off";
+      statusEl.textContent = `${msLabel} / ${dcLabel} / ${dcsddLabel}`;
       requestAnimationFrame(render);
     }
 
@@ -1019,6 +1436,22 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       dualUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      dcsddUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      hermiteDebugUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      normalDebugUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      sampleDebugUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
@@ -1091,6 +1524,18 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       visible.contouring = showContouringEl.checked;
     });
 
+    showDcsddEl.addEventListener("change", () => {
+      visible.dcsdd = showDcsddEl.checked;
+    });
+
+    debugHermiteEl.addEventListener("change", () => {
+      visible.hermiteDebug = debugHermiteEl.checked;
+    });
+
+    debugSamplesEl.addEventListener("change", () => {
+      visible.sampleDebug = debugSamplesEl.checked;
+    });
+
     pauseButton.addEventListener("click", () => {
       paused = !paused;
       pauseButton.textContent = paused ? "Resume" : "Pause";
@@ -1102,6 +1547,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement || event.target instanceof HTMLSelectElement) return;
       if (event.key === "1") visible.marching = !visible.marching;
       if (event.key === "2") visible.contouring = !visible.contouring;
+      if (event.key === "3") visible.dcsdd = !visible.dcsdd;
       syncToggles();
     });
 
