@@ -300,7 +300,7 @@
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold. ADS refines crossing edges, samples them, then contours Delaunay triangles.</p>
+    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold. ADS debug draws the refined Delaunay, samples crossing edges, then contours triangles.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -871,7 +871,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     }
 
     function ensureScaffoldBase() {
-      const radius = Math.max(20 * dpr, Number(cellEl.value) * dpr * 1.5);
+      const radius = Number(cellEl.value) * dpr * 1.2;
       const key = `${width}:${height}:${radius.toFixed(2)}:${blobs.length}`;
       if (scaffold && scaffoldKey === key) return scaffold;
       scaffoldKey = key;
@@ -959,7 +959,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function buildRefinedScaffold(t) {
       const base = ensureScaffoldBase();
       const iso = Number(isoEl.value);
-      const epsilon = Math.max(8 * dpr, Number(cellEl.value) * dpr);
+      const epsilon = Number(cellEl.value) * dpr * 0.45;
       const delta = Math.max(2.5 * dpr, epsilon * 0.18);
       const maxIterations = 3;
       const maxNewPointsPerIteration = 96;
@@ -1021,7 +1021,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function buildScaffoldDebugSegments(t) {
       const base = buildRefinedScaffold(t);
       const signs = base.signs;
-      const scaffoldSegments = [];
+      const refinedDelaunaySegments = [];
       const crossingSegments = [];
       const insidePointSegments = [];
       const outsidePointSegments = [];
@@ -1036,7 +1036,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       for (const [a, b] of base.edges) {
         const pa = base.points[a];
         const pb = base.points[b];
-        scaffoldSegments.push(pa.x, pa.y, pb.x, pb.y);
+        refinedDelaunaySegments.push(pa.x, pa.y, pb.x, pb.y);
         if (signs[a] !== signs[b]) {
           crossingSegments.push(pa.x, pa.y, pb.x, pb.y);
           const sample = findCrossingPoint(pa, pb, signs[a], t, Number(isoEl.value));
@@ -1072,7 +1072,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       }
 
       return {
-        scaffoldSegments: new Float32Array(scaffoldSegments),
+        refinedDelaunaySegments: new Float32Array(refinedDelaunaySegments),
         crossingSegments: new Float32Array(crossingSegments),
         insidePointSegments: new Float32Array(insidePointSegments),
         outsidePointSegments: new Float32Array(outsidePointSegments),
@@ -1080,6 +1080,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         crossingSampleSegments: new Float32Array(crossingSampleSegments),
         adsContourSegments: new Float32Array(adsContourSegments),
         pointCount: base.points.length,
+        edgeCount: refinedDelaunaySegments.length / 4,
         triangleCount: base.triangles.length,
         crossingCount: crossingSegments.length / 4,
         sampleCount: crossingSampleSegments.length / 8,
@@ -1194,7 +1195,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const field = buildFieldGrid(phase);
       const segments = visible.marching ? buildMarchingSegments(field) : new Float32Array();
       const scaffoldDebug = visible.ads ? getScaffoldDebugSegments(phase) : {
-        scaffoldSegments: new Float32Array(),
+        refinedDelaunaySegments: new Float32Array(),
         crossingSegments: new Float32Array(),
         insidePointSegments: new Float32Array(),
         outsidePointSegments: new Float32Array(),
@@ -1202,6 +1203,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         crossingSampleSegments: new Float32Array(),
         adsContourSegments: new Float32Array(),
         pointCount: 0,
+        edgeCount: 0,
         triangleCount: 0,
         crossingCount: 0,
         sampleCount: 0,
@@ -1210,7 +1212,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         longCrossingCount: 0,
       };
       const scaffoldOffset = gridSegments.length + segments.length;
-      const crossingOffset = scaffoldOffset + scaffoldDebug.scaffoldSegments.length;
+      const crossingOffset = scaffoldOffset + scaffoldDebug.refinedDelaunaySegments.length;
       const insidePointOffset = crossingOffset + scaffoldDebug.crossingSegments.length;
       const outsidePointOffset = insidePointOffset + scaffoldDebug.insidePointSegments.length;
       const insertedPointOffset = outsidePointOffset + scaffoldDebug.outsidePointSegments.length;
@@ -1219,7 +1221,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const combinedSegments = new Float32Array(adsContourOffset + scaffoldDebug.adsContourSegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
-      combinedSegments.set(scaffoldDebug.scaffoldSegments, scaffoldOffset);
+      combinedSegments.set(scaffoldDebug.refinedDelaunaySegments, scaffoldOffset);
       combinedSegments.set(scaffoldDebug.crossingSegments, crossingOffset);
       combinedSegments.set(scaffoldDebug.insidePointSegments, insidePointOffset);
       combinedSegments.set(scaffoldDebug.outsidePointSegments, outsidePointOffset);
@@ -1276,7 +1278,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       }
       if (visible.ads) {
         pass.setBindGroup(0, scaffoldBindGroup);
-        pass.draw(6, scaffoldDebug.scaffoldSegments.length / 4, 0, scaffoldOffset / 4);
+        pass.draw(6, scaffoldDebug.refinedDelaunaySegments.length / 4, 0, scaffoldOffset / 4);
         // pass.setBindGroup(0, crossingBindGroup);
         // pass.draw(6, scaffoldDebug.crossingSegments.length / 4, 0, crossingOffset / 4);
         // pass.setBindGroup(0, insidePointBindGroup);
@@ -1295,7 +1297,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
       const marchingLabel = visible.marching ? `${segments.length / 4 | 0} mc` : "mc off";
       const adsLabel = visible.ads
-        ? `${scaffoldDebug.pointCount} pts / +${scaffoldDebug.insertedCount} / ${scaffoldDebug.contourCount | 0} ads`
+        ? `${scaffoldDebug.edgeCount | 0} refined edges / ${scaffoldDebug.contourCount | 0} ads`
         : "ads off";
       statusEl.textContent = `${marchingLabel} / ${adsLabel}`;
       requestAnimationFrame(render);
