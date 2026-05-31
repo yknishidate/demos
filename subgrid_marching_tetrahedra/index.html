@@ -302,6 +302,12 @@
     </div>
 
     <p class="note" id="note">1: Classic, 2: Subgrid, 3: Split view. Split view clips Classic left and Subgrid right.</p>
+    <a class="repo-link" href="https://www.cs.cmu.edu/~kmcrane/Projects/SubgridMarching/index.html" target="_blank" rel="noreferrer">
+      <span>Subgrid Marching Tetrahedra</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -359,7 +365,7 @@
     const visible = {
       classic: true,
       subgrid: true,
-      split: false,
+      split: true,
     };
     setupCompactUi({ hud: hudEl, button: compactUiEl });
 
@@ -483,7 +489,7 @@ fn sampleField(pixel: vec2f) -> f32 {
   if (uniforms.pointerActive > 0.5) {
     let dx = n.x - uniforms.pointer.x;
     let dy = n.y - uniforms.pointer.y;
-    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
+    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.053;
     let pointerCore = max(0.0, 1.0 - pointerMetric);
     v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
   }
@@ -614,7 +620,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (pointer.active) {
         const dx = nx - pointer.x;
         const dy = ny - pointer.y;
-        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
+        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.053;
         const pointerCore = Math.max(0, 1 - pointerMetric);
         v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }

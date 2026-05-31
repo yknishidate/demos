@@ -195,6 +195,10 @@
       text-decoration: none;
     }
 
+    .repo-link span {
+      min-width: 0;
+    }
+
     .repo-link:hover {
       color: var(--text);
       text-decoration: underline;
@@ -305,6 +309,12 @@
     </div>
 
     <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold, 3: Split view. Split clips MC left and ADS right.</p>
+    <a class="repo-link" href="https://arxiv.org/abs/2605.03235" target="_blank" rel="noreferrer">
+      <span>ADS: Random Sampling of Occupancy Functions using Adaptive Delaunay Scaffolding</span>
+      <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M6 4H3.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10h-1v2.5a.5.5 0 0 1-.5.5h-7a.5.5 0 0 1-.5-.5v-7a.5.5 0 0 1 .5-.5H6V4Zm2-2v1h4.3L6.65 8.65l.7.7L13 3.7V8h1V2H8Z" fill="currentColor"/>
+      </svg>
+    </a>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -386,7 +396,6 @@
     let paused = true;
     let phase = 0;
     let lastTime = performance.now();
-    let pointer = { x: 0.5, y: 0.5, active: false };
     let blobs = [];
     const BLOB_COUNT = 14;
     let scaffold = null;
@@ -524,14 +533,6 @@ fn sampleField(pixel: vec2f) -> f32 {
     v = v + blob.c.y * (body + bevel);
   }
 
-  if (uniforms.pointerActive > 0.5) {
-    let dx = n.x - uniforms.pointer.x;
-    let dy = n.y - uniforms.pointer.y;
-    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
-    let pointerCore = max(0.0, 1.0 - pointerMetric);
-    v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
-  }
-
   return v;
 }
 
@@ -656,14 +657,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         const body = 1 - smoothstep(0.88, 1.02, metric);
         const bevel = (1 - smoothstep(0.72, 1.22, metric)) * 0.12;
         v += blob.weight * (body + bevel);
-      }
-
-      if (pointer.active) {
-        const dx = nx - pointer.x;
-        const dy = ny - pointer.y;
-        const pointerMetric = Math.max(Math.abs(dx) * (width / height), Math.abs(dy)) / 0.16;
-        const pointerCore = Math.max(0, 1 - pointerMetric);
-        v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }
 
       return v;
@@ -1140,17 +1133,12 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function getScaffoldDebugSegments(t) {
       ensureScaffoldBase();
       const phaseBucket = Math.floor(t * 5);
-      const pointerX = pointer.active ? Math.round(pointer.x * 80) : -1;
-      const pointerY = pointer.active ? Math.round(pointer.y * 80) : -1;
       const key = [
         width,
         height,
         cellEl.value,
         isoEl.value,
         phaseBucket,
-        pointer.active ? 1 : 0,
-        pointerX,
-        pointerY,
         scaffoldKey,
       ].join(":");
       if (scaffoldDebugCache && scaffoldDebugKey === key) return scaffoldDebugCache;
@@ -1303,7 +1291,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const crossingSampleUniformData = new Float32Array([width, height, Math.max(1.6, dpr * 1.8), 0, 0.97, 0.98, 0.88, 0.92, adsClip[0], adsClip[1], 0, 0]);
       const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94, adsClip[0], adsClip[1], 0, 0]);
       const boundaryUniformData = new Float32Array([width, height, Math.max(1, dpr * 2), 0, 0.92, 0.96, 1.0, 0.62, fullClip[0], fullClip[1], 0, 0]);
-      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
+      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, 0.5, 0.5, 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(marchingUniformBuffer, 0, marchingUniformData);
       device.queue.writeBuffer(scaffoldUniformBuffer, 0, scaffoldUniformData);
@@ -1546,18 +1534,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pauseButton.textContent = paused ? "Resume" : "Pause";
       }
       syncToggles();
-    });
-
-    canvas.addEventListener("pointermove", (event) => {
-      const rect = canvas.getBoundingClientRect();
-      pointer.x = (event.clientX - rect.left) / rect.width;
-      pointer.y = (event.clientY - rect.top) / rect.height;
-      pointer.active = true;
-    });
-
-    canvas.addEventListener("pointerleave", () => {
-      pointer.active = false;
-      scaffoldDebugCache = null;
     });
 
     window.addEventListener("resize", () => {
