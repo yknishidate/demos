@@ -42,8 +42,8 @@
     .hud {
       position: fixed;
       inset: 18px auto auto 18px;
-      width: min(360px, calc(100vw - 36px));
-      padding: 16px;
+      width: min(330px, calc(100vw - 36px));
+      padding: 12px;
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       background: var(--panel);
@@ -56,12 +56,12 @@
       align-items: center;
       justify-content: space-between;
       gap: 14px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }
 
     h1 {
       margin: 0;
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1.2;
       font-weight: 700;
       letter-spacing: 0;
@@ -70,21 +70,21 @@
     .status {
       min-width: 170px;
       color: var(--accent);
-      font-size: 12px;
+      font-size: 11px;
       text-align: right;
       white-space: nowrap;
     }
 
     .controls {
       display: grid;
-      gap: 12px;
+      gap: 9px;
     }
 
     label {
       display: grid;
-      gap: 7px;
+      gap: 5px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .label-row {
@@ -107,18 +107,18 @@
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px;
+      gap: 8px;
       margin-top: 2px;
     }
 
     button {
-      height: 36px;
+      height: 32px;
       border: 1px solid rgba(255, 255, 255, 0.14);
       border-radius: 7px;
       background: rgba(255, 255, 255, 0.07);
       color: var(--text);
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
     }
 
@@ -130,7 +130,7 @@
     .toggle-row {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 8px;
+      gap: 6px;
       margin-top: 2px;
     }
 
@@ -138,22 +138,22 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      min-height: 30px;
+      gap: 10px;
+      min-height: 26px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .toggle-name {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       min-width: 0;
     }
 
     .swatch {
-      width: 11px;
-      height: 11px;
+      width: 10px;
+      height: 10px;
       flex: 0 0 auto;
       border-radius: 3px;
     }
@@ -176,9 +176,9 @@
     }
 
     .note {
-      margin: 12px 0 0;
+      margin: 9px 0 0;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       line-height: 1.45;
     }
 
@@ -186,9 +186,9 @@
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      margin-top: 8px;
+      margin-top: 6px;
       color: rgba(170, 180, 192, 0.78);
-      font-size: 12px;
+      font-size: 11px;
       text-decoration: none;
     }
 
@@ -245,7 +245,7 @@
 
   <section class="hud" aria-label="Marching triangle controls">
     <div class="title-row">
-      <h1>Marching Triangle</h1>
+      <h1>Subgrid Marching Triangle</h1>
       <div class="status" id="status">starting</div>
     </div>
 
@@ -296,10 +296,14 @@
           <span class="toggle-name"><span class="swatch swatch-subgrid" aria-hidden="true"></span>Subgrid</span>
           <input id="showSubgrid" type="checkbox" checked />
         </label>
+        <label class="toggle" for="splitView">
+          <span class="toggle-name">Split view</span>
+          <input id="splitView" type="checkbox" />
+        </label>
       </div>
     </div>
 
-    <p class="note" id="note">1: Classic, 2: Subgrid. Classic samples triangle vertices only; Subgrid samples along each triangle edge.</p>
+    <p class="note" id="note">1: Classic, 2: Subgrid, 3: Split view. Split view clips Classic left and Subgrid right.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -324,6 +328,7 @@
     const shuffleButton = document.querySelector("#shuffle");
     const showClassicEl = document.querySelector("#showClassic");
     const showSubgridEl = document.querySelector("#showSubgrid");
+    const splitViewEl = document.querySelector("#splitView");
 
     let device;
     let context;
@@ -334,11 +339,13 @@
     let classicUniformBuffer;
     let subgridUniformBuffer;
     let gridUniformBuffer;
+    let boundaryUniformBuffer;
     let segmentBuffer;
     let backgroundBindGroup;
     let classicBindGroup;
     let subgridBindGroup;
     let gridBindGroup;
+    let boundaryBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
     let width = 1;
@@ -352,6 +359,7 @@
     const visible = {
       classic: true,
       subgrid: true,
+      split: false,
     };
 
     const shaderCode = `
@@ -360,6 +368,8 @@ struct Uniforms {
   thickness: f32,
   _pad: f32,
   color: vec4f,
+  clipRange: vec2f,
+  _pad2: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -396,6 +406,9 @@ fn vs(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instance
 
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4f {
+  if (in.position.x < uniforms.clipRange.x || in.position.x > uniforms.clipRange.y) {
+    discard;
+  }
   let core = 1.0 - smoothstep(0.72, 1.0, abs(in.local.y));
   let glow = 1.0 - smoothstep(0.95, 1.65, abs(in.local.y));
   let tint = mix(uniforms.color.rgb * 0.82, uniforms.color.rgb, core);
@@ -508,6 +521,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function syncToggles() {
       showClassicEl.checked = visible.classic;
       showSubgridEl.checked = visible.subgrid;
+      splitViewEl.checked = visible.split;
     }
 
     function shapeId(shape) {
@@ -843,6 +857,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      boundaryBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boundaryUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -855,20 +876,27 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const field = buildFieldGrid(phase);
       const classicSegments = visible.classic ? buildMarchingTriangleSegments(field, "classic") : new Float32Array();
       const subgridSegments = visible.subgrid ? buildMarchingTriangleSegments(field, "subgrid") : new Float32Array();
-      const combinedSegments = new Float32Array(gridSegments.length + classicSegments.length + subgridSegments.length);
+      const boundarySegments = visible.split ? new Float32Array([width * 0.5, 0, width * 0.5, height]) : new Float32Array();
+      const combinedSegments = new Float32Array(gridSegments.length + classicSegments.length + subgridSegments.length + boundarySegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(classicSegments, gridSegments.length);
       combinedSegments.set(subgridSegments, gridSegments.length + classicSegments.length);
+      combinedSegments.set(boundarySegments, gridSegments.length + classicSegments.length + subgridSegments.length);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
 
-      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.13]);
-      const classicUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.66]);
-      const subgridUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.72]);
+      const fullClip = [0, width];
+      const classicClip = visible.split ? [0, width * 0.5] : fullClip;
+      const subgridClip = visible.split ? [width * 0.5, width] : fullClip;
+      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.13, fullClip[0], fullClip[1], 0, 0]);
+      const classicUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.66, classicClip[0], classicClip[1], 0, 0]);
+      const subgridUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.72, subgridClip[0], subgridClip[1], 0, 0]);
+      const boundaryUniformData = new Float32Array([width, height, Math.max(1, dpr * 2), 0, 0.92, 0.96, 1.0, 0.62, fullClip[0], fullClip[1], 0, 0]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(classicUniformBuffer, 0, classicUniformData);
       device.queue.writeBuffer(subgridUniformBuffer, 0, subgridUniformData);
+      device.queue.writeBuffer(boundaryUniformBuffer, 0, boundaryUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(sourceBuffer, 0, buildSourceData());
 
@@ -895,12 +923,17 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.setBindGroup(0, subgridBindGroup);
         pass.draw(6, subgridSegments.length / 4, 0, (gridSegments.length + classicSegments.length) / 4);
       }
+      if (visible.split) {
+        pass.setBindGroup(0, boundaryBindGroup);
+        pass.draw(6, boundarySegments.length / 4, 0, (gridSegments.length + classicSegments.length + subgridSegments.length) / 4);
+      }
       pass.end();
       device.queue.submit([encoder.finish()]);
 
       const classicLabel = visible.classic ? `${classicSegments.length / 4 | 0} classic` : "classic off";
       const subgridLabel = visible.subgrid ? `${subgridSegments.length / 4 | 0} subgrid` : "subgrid off";
-      statusEl.textContent = `${classicLabel} / ${subgridLabel}`;
+      const splitLabel = visible.split ? "split" : "overlay";
+      statusEl.textContent = `${classicLabel} / ${subgridLabel} / ${splitLabel}`;
       requestAnimationFrame(render);
     }
 
@@ -942,15 +975,19 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
       gridUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       classicUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       subgridUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      boundaryUniformBuffer = device.createBuffer({
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
 
@@ -1022,6 +1059,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       visible.subgrid = showSubgridEl.checked;
     });
 
+    splitViewEl.addEventListener("change", () => {
+      visible.split = splitViewEl.checked;
+    });
+
     pauseButton.addEventListener("click", () => {
       paused = !paused;
       pauseButton.textContent = paused ? "Resume" : "Pause";
@@ -1033,6 +1074,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
       if (event.key === "1") visible.classic = !visible.classic;
       if (event.key === "2") visible.subgrid = !visible.subgrid;
+      if (event.key === "3") visible.split = !visible.split;
       syncToggles();
     });
 
