@@ -557,6 +557,31 @@ fn boxDistance(p: vec2f, halfSize: vec2f) -> f32 {
   return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0);
 }
 
+fn segmentDistanceSquared(p: vec2f, a: vec2f, b: vec2f) -> f32 {
+  let e = b - a;
+  let w = p - a;
+  let t = clamp(dot(w, e) / max(dot(e, e), 1.0e-8), 0.0, 1.0);
+  let q = a + e * t;
+  let d = p - q;
+  return dot(d, d);
+}
+
+fn diamondDistance(p: vec2f, radius: f32, aspect: f32) -> f32 {
+  let a = radius;
+  let b = radius * aspect;
+  let v0 = vec2f(0.0, -b);
+  let v1 = vec2f(a, 0.0);
+  let v2 = vec2f(0.0, b);
+  let v3 = vec2f(-a, 0.0);
+  let d2 = min(
+    min(segmentDistanceSquared(p, v0, v1), segmentDistanceSquared(p, v1, v2)),
+    min(segmentDistanceSquared(p, v2, v3), segmentDistanceSquared(p, v3, v0))
+  );
+  let inside = (abs(p.x) / max(a, 1.0e-8) + abs(p.y) / max(b, 1.0e-8)) <= 1.0;
+  let d = sqrt(d2);
+  return select(-d, d, inside);
+}
+
 fn shapeSdf(blob: Blob, pixel: vec2f) -> f32 {
   let minDim = min(uniforms.resolution.x, uniforms.resolution.y);
   let center = vec2f(blob.a.x, blob.a.y) * uniforms.resolution;
@@ -584,8 +609,7 @@ fn shapeSdf(blob: Blob, pixel: vec2f) -> f32 {
     return -boxDistance(p, vec2f(radius, radius * aspect));
   }
   if (shape < 2.5) {
-    let diamond = (abs(p.x) + abs(p.y) / max(0.25, aspect)) * 0.70710678;
-    return radius - diamond;
+    return diamondDistance(p, radius, aspect);
   }
   return -boxDistance(p, vec2f(radius * 1.45, radius * 0.58 * aspect));
 }
@@ -704,6 +728,50 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0);
     }
 
+    function signedDistancePolygon(px, py, vertices) {
+      let minDistSq = Infinity;
+      let inside = false;
+
+      for (let i = 0, j = vertices.length - 1; i < vertices.length; j = i++) {
+        const vi = vertices[i];
+        const vj = vertices[j];
+        if (((vi.y > py) !== (vj.y > py)) &&
+            (px < (vj.x - vi.x) * (py - vi.y) / ((vj.y - vi.y) || 1e-8) + vi.x)) {
+          inside = !inside;
+        }
+      }
+
+      for (let i = 0; i < vertices.length; i++) {
+        const a = vertices[i];
+        const b = vertices[(i + 1) % vertices.length];
+        const ex = b.x - a.x;
+        const ey = b.y - a.y;
+        const wx = px - a.x;
+        const wy = py - a.y;
+        const lenSq = Math.max(ex * ex + ey * ey, 1e-8);
+        const t = Math.max(0, Math.min(1, (wx * ex + wy * ey) / lenSq));
+        const qx = a.x + ex * t;
+        const qy = a.y + ey * t;
+        const dx = px - qx;
+        const dy = py - qy;
+        minDistSq = Math.min(minDistSq, dx * dx + dy * dy);
+      }
+
+      const d = Math.sqrt(minDistSq);
+      return inside ? d : -d;
+    }
+
+    function diamondSdfExact(px, py, radius, aspect) {
+      const a = radius;
+      const b = radius * aspect;
+      return signedDistancePolygon(px, py, [
+        { x: 0, y: -b },
+        { x: a, y: 0 },
+        { x: 0, y: b },
+        { x: -a, y: 0 },
+      ]);
+    }
+
     function shapeSdf(blob, x, y, t) {
       const minDim = Math.min(width, height);
       const cx = blob.x * width + Math.cos(t * blob.speed + blob.angle) * blob.drift * minDim;
@@ -718,7 +786,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const py = dx * s + dy * c;
 
       if (blob.shape === "square") return -boxDistance(px, py, radius, radius * blob.aspect);
-      if (blob.shape === "diamond") return radius - (Math.abs(px) + Math.abs(py) / Math.max(0.25, blob.aspect)) * Math.SQRT1_2;
+      if (blob.shape === "diamond") return diamondSdfExact(px, py, radius, blob.aspect);
       if (blob.shape === "block") return -boxDistance(px, py, radius * 1.45, radius * 0.58 * blob.aspect);
       return radius - Math.hypot(px, py / blob.aspect);
     }
@@ -1147,14 +1215,22 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             const normal = estimateBilinearNormal(crossing.x, crossing.y, bounds, localValues);
             const edgeInfo = edges[edgeIndex];
             if (edgeInfo.cells.length > 0) {
-              edgeInfo.normalSum.x += normal[0];
-              edgeInfo.normalSum.y += normal[1];
+              let nx = normal[0];
+              let ny = normal[1];
+              if (nx * edgeInfo.n.x + ny * edgeInfo.n.y < 0) {
+                nx = -nx;
+                ny = -ny;
+              }
+              edgeInfo.normalSum.x += nx;
+              edgeInfo.normalSum.y += ny;
               edgeInfo.normalCount++;
-              const normalLength = Math.hypot(edgeInfo.normalSum.x, edgeInfo.normalSum.y) || 1;
-              edgeInfo.n = {
-                x: edgeInfo.normalSum.x / normalLength,
-                y: edgeInfo.normalSum.y / normalLength,
-              };
+              const normalLength = Math.hypot(edgeInfo.normalSum.x, edgeInfo.normalSum.y);
+              if (normalLength > 0.000001) {
+                edgeInfo.n = {
+                  x: edgeInfo.normalSum.x / normalLength,
+                  y: edgeInfo.normalSum.y / normalLength,
+                };
+              }
             }
             hermites.push(edgeIndex);
             edges[edgeIndex].cells.push(index);
@@ -1186,9 +1262,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const hermiteWeight = Number(hermiteWeightEl.value);
       const regularizationWeight = Number(regularizationEl.value);
       const hermiteUpdateWeight = Number(updateWeightEl.value);
-      const vertexDamping = 0.28;
-      const maxVertexMove = cell * 0.14;
-      const trustRadius = cell * 1.15;
+      const vertexDamping = 1.0;
+      const maxVertexMove = cell * 0.25;
+      const trustRadius = cell * 1.5;
       const maxSamplesPerCell = 18;
       const outerIterations = Number(iterationsEl.value);
       const innerIterations = 12;
@@ -1259,6 +1335,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
               }
             }
             if (!best) continue;
+            const closestDistance = Math.sqrt(best.distanceSq);
+            const cellDiagonal = Math.SQRT2 * cell;
+            if (closestDistance > cellDiagonal * 0.75 + Math.abs(signedDistance)) continue;
 
             let targetCell = containingCellIndex(best.closest);
             if (!cells[targetCell]) {
@@ -1301,7 +1380,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
                 nx: hermite.n.x,
                 ny: hermite.n.y,
                 b: hermite.n.x * hermite.p.x + hermite.n.y * hermite.p.y,
-                w: hermiteWeight,
+                w: hermiteWeight * hermiteWeight,
               });
             }
 
@@ -1372,8 +1451,12 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
             const dy = b.y - a.y;
             const length = Math.hypot(dx, dy);
             if (length < 0.0001) continue;
-            const intersection = lineIntersection(a, b, edge.endpoints[0], edge.endpoints[1]);
-            if (!intersection) continue;
+            let intersection = lineIntersection(a, b, edge.endpoints[0], edge.endpoints[1]);
+            if (!intersection) {
+              const projected = closestPointOnSegment(edge.p, a, b);
+              const edgeProjected = closestPointOnSegment(projected, edge.endpoints[0], edge.endpoints[1]);
+              intersection = { x: edgeProjected.x, y: edgeProjected.y };
+            }
             let nx = -dy / length;
             let ny = dx / length;
             if (nx * edge.n.x + ny * edge.n.y < 0) {
