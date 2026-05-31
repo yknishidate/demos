@@ -262,17 +262,17 @@
       <label>
         <span class="label-row">
           <span>Iso value</span>
-          <output id="isoOut">0.42</output>
+          <output id="isoOut">0.68</output>
         </span>
-        <input id="iso" type="range" min="0.08" max="1.2" step="0.01" value="0.42" />
+        <input id="iso" type="range" min="0.12" max="1.4" step="0.01" value="0.68" />
       </label>
 
       <label>
         <span class="label-row">
           <span>Cell size</span>
-          <output id="cellOut">12 px</output>
+          <output id="cellOut">20 px</output>
         </span>
-        <input id="cell" type="range" min="5" max="36" step="1" value="12" />
+        <input id="cell" type="range" min="5" max="36" step="1" value="20" />
       </label>
 
       <label>
@@ -460,29 +460,37 @@ fn shapeMetric(blob: Blob, dx: f32, dy: f32) -> f32 {
   let sx = dx * canvasAspect;
   let sy = dy;
   let radius = blob.a.z;
-  let speed = blob.a.w;
   let angle = blob.b.x;
   let rotation = blob.b.z;
   let aspect = blob.b.w;
   let shape = blob.c.x;
-  let turn = rotation + sin(uniforms.phase * speed * 0.7 + angle) * 0.45;
+  let turn = rotation;
   let c = cos(turn);
   let s = sin(turn);
   let rx = (sx * c - sy * s) / radius;
   let ry = (sx * s + sy * c) / (radius * aspect);
   let ax = abs(rx);
   let ay = abs(ry);
+  let theta = atan2(ry, rx);
+  let teeth = abs(fract(theta / 6.2831853 * 10.0 + angle * 0.37) - 0.5) * 2.0;
+  let toothMetric = length(vec2f(rx, ry)) + (teeth - 0.5) * blob.c.z * 1.6;
+  let baseBox = max(ax / 0.88, ay / 0.72);
+  let sideTabs = max((ax - 0.88) / 0.34, ay / 0.26);
+  let endTabs = max(ax / 0.24, (ay - 0.72) / 0.30);
+  let steppedBlock = min(baseBox, min(sideTabs, endTabs));
+  let diamondBlock = min(ax + ay, max(ax / 0.32, (ay - 0.62) / 0.30));
+  let longBlock = min(max(ax / 1.35, ay / 0.48), max((ax - 1.10) / 0.26, ay / 0.86));
 
   if (shape < 0.5) {
-    return length(vec2f(rx, ry));
+    return min(toothMetric, steppedBlock * 1.08);
   }
   if (shape < 1.5) {
-    return max(ax, ay);
+    return steppedBlock;
   }
   if (shape < 2.5) {
-    return ax + ay;
+    return diamondBlock;
   }
-  return max(ax / 1.45, ay / 0.58);
+  return longBlock;
 }
 
 fn sampleField(pixel: vec2f) -> f32 {
@@ -494,10 +502,9 @@ fn sampleField(pixel: vec2f) -> f32 {
     let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
     let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
     let metric = shapeMetric(blob, n.x - bx, n.y - by);
-    let wallWidth = blob.c.z;
-    let wallDistance = abs(metric - 1.0);
-    let wall = exp(-(wallDistance * wallDistance) / (2.0 * wallWidth * wallWidth));
-    v = v + blob.c.y * wall;
+    let body = 1.0 - smoothstep(0.88, 1.02, metric);
+    let bevel = (1.0 - smoothstep(0.72, 1.22, metric)) * 0.12;
+    v = v + blob.c.y * (body + bevel);
   }
 
   if (uniforms.pointerActive > 0.5) {
@@ -508,8 +515,7 @@ fn sampleField(pixel: vec2f) -> f32 {
     v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
   }
 
-  let ripple = sin(n.x * 11.0 + uniforms.phase * 0.35) * cos(n.y * 9.0 - uniforms.phase * 0.3) * 0.012;
-  return v + ripple;
+  return v;
 }
 
 @vertex
@@ -560,7 +566,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         data[offset + 7] = blob.aspect;
         data[offset + 8] = shapeId(blob.shape);
         data[offset + 9] = blob.weight;
-        data[offset + 10] = blob.wallWidth;
+        data[offset + 10] = blob.detailAmp;
       }
       return data;
     }
@@ -577,8 +583,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         rotation: Math.random() * Math.PI,
         aspect: 0.65 + Math.random() * 0.9,
         shape: shapes[i % shapes.length],
-        weight: i % 3 === 0 ? 0.95 : 0.78,
-        wallWidth: 0.035 + Math.random() * 0.035,
+        weight: i % 3 === 0 ? 0.9 : 0.72,
+        detailAmp: 0.075 + Math.random() * 0.06,
       }));
     }
 
@@ -597,18 +603,27 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const canvasAspect = width / height;
       const sx = dx * canvasAspect;
       const sy = dy;
-      const turn = blob.rotation + Math.sin(t * blob.speed * 0.7 + blob.angle) * 0.45;
+      const turn = blob.rotation;
       const c = Math.cos(turn);
       const s = Math.sin(turn);
       const rx = (sx * c - sy * s) / blob.radius;
       const ry = (sx * s + sy * c) / (blob.radius * blob.aspect);
       const ax = Math.abs(rx);
       const ay = Math.abs(ry);
+      const theta = Math.atan2(ry, rx);
+      const teeth = Math.abs(fract(theta / (Math.PI * 2) * 10 + blob.angle * 0.37) - 0.5) * 2;
+      const toothMetric = Math.hypot(rx, ry) + (teeth - 0.5) * blob.detailAmp * 1.6;
+      const baseBox = Math.max(ax / 0.88, ay / 0.72);
+      const sideTabs = Math.max((ax - 0.88) / 0.34, ay / 0.26);
+      const endTabs = Math.max(ax / 0.24, (ay - 0.72) / 0.30);
+      const steppedBlock = Math.min(baseBox, sideTabs, endTabs);
+      const diamondBlock = Math.min(ax + ay, Math.max(ax / 0.32, (ay - 0.62) / 0.30));
+      const longBlock = Math.min(Math.max(ax / 1.35, ay / 0.48), Math.max((ax - 1.10) / 0.26, ay / 0.86));
 
-      if (blob.shape === "square") return Math.max(ax, ay);
-      if (blob.shape === "diamond") return ax + ay;
-      if (blob.shape === "block") return Math.max(ax / 1.45, ay / 0.58);
-      return Math.hypot(rx, ry);
+      if (blob.shape === "square") return steppedBlock;
+      if (blob.shape === "diamond") return diamondBlock;
+      if (blob.shape === "block") return longBlock;
+      return Math.min(toothMetric, steppedBlock * 1.08);
     }
 
     function sampleField(x, y, t) {
@@ -622,9 +637,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         const dx = nx - bx;
         const dy = ny - by;
         const metric = shapeMetric(blob, dx, dy, t);
-        const wallDistance = Math.abs(metric - 1);
-        const wall = Math.exp(-(wallDistance * wallDistance) / (2 * blob.wallWidth * blob.wallWidth));
-        v += blob.weight * wall;
+        const body = 1 - smoothstep(0.88, 1.02, metric);
+        const bevel = (1 - smoothstep(0.72, 1.22, metric)) * 0.12;
+        v += blob.weight * (body + bevel);
       }
 
       if (pointer.active) {
@@ -635,8 +650,16 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }
 
-      const ripple = Math.sin(nx * 11 + t * 0.35) * Math.cos(ny * 9 - t * 0.3) * 0.012;
-      return v + ripple;
+      return v;
+    }
+
+    function smoothstep(edge0, edge1, x) {
+      const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
+      return t * t * (3 - 2 * t);
+    }
+
+    function fract(x) {
+      return x - Math.floor(x);
     }
 
     function interpolate(p0, p1, v0, v1, iso) {
@@ -959,7 +982,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function buildRefinedScaffold(t) {
       const base = ensureScaffoldBase();
       const iso = Number(isoEl.value);
-      const epsilon = Number(cellEl.value) * dpr * 0.45;
+      const epsilon = Number(cellEl.value) * dpr * 0.05;
       const delta = Math.max(2.5 * dpr, epsilon * 0.18);
       const maxIterations = 3;
       const maxNewPointsPerIteration = 96;
