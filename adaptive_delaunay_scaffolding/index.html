@@ -262,9 +262,9 @@
       <label>
         <span class="label-row">
           <span>Iso value</span>
-          <output id="isoOut">0.80</output>
+          <output id="isoOut">0.42</output>
         </span>
-        <input id="iso" type="range" min="0.25" max="1.8" step="0.01" value="0.80" />
+        <input id="iso" type="range" min="0.08" max="1.2" step="0.01" value="0.42" />
       </label>
 
       <label>
@@ -374,7 +374,7 @@
     let width = 1;
     let height = 1;
     let dpr = 1;
-    let paused = false;
+    let paused = true;
     let phase = 0;
     let lastTime = performance.now();
     let pointer = { x: 0.5, y: 0.5, active: false };
@@ -494,8 +494,10 @@ fn sampleField(pixel: vec2f) -> f32 {
     let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
     let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
     let metric = shapeMetric(blob, n.x - bx, n.y - by);
-    let core = max(0.0, 1.0 - metric);
-    v = v + blob.c.y * (1.0 / (metric * metric + 0.22) + core * core * 1.6);
+    let wallWidth = blob.c.z;
+    let wallDistance = abs(metric - 1.0);
+    let wall = exp(-(wallDistance * wallDistance) / (2.0 * wallWidth * wallWidth));
+    v = v + blob.c.y * wall;
   }
 
   if (uniforms.pointerActive > 0.5) {
@@ -506,8 +508,8 @@ fn sampleField(pixel: vec2f) -> f32 {
     v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
   }
 
-  let ripple = sin(n.x * 20.0 + uniforms.phase * 0.8) * cos(n.y * 16.0 - uniforms.phase * 0.7) * 0.045;
-  return v * 0.18 + ripple;
+  let ripple = sin(n.x * 11.0 + uniforms.phase * 0.35) * cos(n.y * 9.0 - uniforms.phase * 0.3) * 0.012;
+  return v + ripple;
 }
 
 @vertex
@@ -558,23 +560,25 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         data[offset + 7] = blob.aspect;
         data[offset + 8] = shapeId(blob.shape);
         data[offset + 9] = blob.weight;
+        data[offset + 10] = blob.wallWidth;
       }
       return data;
     }
 
     function shuffleBlobs() {
-      const shapes = ["square"];
+      const shapes = ["circle", "square", "diamond", "block"];
       blobs = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.09 + Math.random() * 0.12,
+        radius: 0.14 + Math.random() * 0.16,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
-        drift: 0.08 + Math.random() * 0.16,
+        drift: 0.05 + Math.random() * 0.12,
         rotation: Math.random() * Math.PI,
         aspect: 0.65 + Math.random() * 0.9,
         shape: shapes[i % shapes.length],
-        weight: i % 3 === 0 ? 1.35 : 1.0,
+        weight: i % 3 === 0 ? 0.95 : 0.78,
+        wallWidth: 0.035 + Math.random() * 0.035,
       }));
     }
 
@@ -618,8 +622,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         const dx = nx - bx;
         const dy = ny - by;
         const metric = shapeMetric(blob, dx, dy, t);
-        const core = Math.max(0, 1 - metric);
-        v += blob.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
+        const wallDistance = Math.abs(metric - 1);
+        const wall = Math.exp(-(wallDistance * wallDistance) / (2 * blob.wallWidth * blob.wallWidth));
+        v += blob.weight * wall;
       }
 
       if (pointer.active) {
@@ -630,8 +635,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }
 
-      const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
-      return v * 0.18 + ripple;
+      const ripple = Math.sin(nx * 11 + t * 0.35) * Math.cos(ny * 9 - t * 0.3) * 0.012;
+      return v + ripple;
     }
 
     function interpolate(p0, p1, v0, v1, iso) {
@@ -866,7 +871,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     }
 
     function ensureScaffoldBase() {
-      const radius = Math.max(30 * dpr, Number(cellEl.value) * dpr * 2.25);
+      const radius = Math.max(20 * dpr, Number(cellEl.value) * dpr * 1.5);
       const key = `${width}:${height}:${radius.toFixed(2)}:${blobs.length}`;
       if (scaffold && scaffoldKey === key) return scaffold;
       scaffoldKey = key;
@@ -1274,14 +1279,14 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.draw(6, scaffoldDebug.scaffoldSegments.length / 4, 0, scaffoldOffset / 4);
         // pass.setBindGroup(0, crossingBindGroup);
         // pass.draw(6, scaffoldDebug.crossingSegments.length / 4, 0, crossingOffset / 4);
-        pass.setBindGroup(0, insidePointBindGroup);
-        pass.draw(6, scaffoldDebug.insidePointSegments.length / 4, 0, insidePointOffset / 4);
-        pass.setBindGroup(0, outsidePointBindGroup);
-        pass.draw(6, scaffoldDebug.outsidePointSegments.length / 4, 0, outsidePointOffset / 4);
+        // pass.setBindGroup(0, insidePointBindGroup);
+        // pass.draw(6, scaffoldDebug.insidePointSegments.length / 4, 0, insidePointOffset / 4);
+        // pass.setBindGroup(0, outsidePointBindGroup);
+        // pass.draw(6, scaffoldDebug.outsidePointSegments.length / 4, 0, outsidePointOffset / 4);
         // pass.setBindGroup(0, insertedPointBindGroup);
         // pass.draw(6, scaffoldDebug.insertedPointSegments.length / 4, 0, insertedPointOffset / 4);
-        pass.setBindGroup(0, crossingSampleBindGroup);
-        pass.draw(6, scaffoldDebug.crossingSampleSegments.length / 4, 0, crossingSampleOffset / 4);
+        // pass.setBindGroup(0, crossingSampleBindGroup);
+        // pass.draw(6, scaffoldDebug.crossingSampleSegments.length / 4, 0, crossingSampleOffset / 4);
         pass.setBindGroup(0, adsContourBindGroup);
         pass.draw(6, scaffoldDebug.adsContourSegments.length / 4, 0, adsContourOffset / 4);
       }
