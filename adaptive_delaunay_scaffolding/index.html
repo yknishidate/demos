@@ -289,10 +289,14 @@
           <span class="toggle-name"><span class="swatch swatch-ads" aria-hidden="true"></span>ADS scaffold</span>
           <input id="showAds" type="checkbox" checked />
         </label>
+        <label class="toggle" for="splitView">
+          <span class="toggle-name">Split view</span>
+          <input id="splitView" type="checkbox" />
+        </label>
       </div>
     </div>
 
-    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold. ADS debug draws the refined Delaunay, samples crossing edges, then contours triangles.</p>
+    <p class="note" id="note">1: Marching Cubes, 2: ADS scaffold, 3: Split view. Split clips MC left and ADS right.</p>
     <a class="repo-link" href="https://github.com/yknishidate/demos" target="_blank" rel="noreferrer">
       <span>github.com/yknishidate/demos</span>
       <svg class="external-mark" viewBox="0 0 16 16" aria-hidden="true">
@@ -313,6 +317,7 @@
     const shuffleButton = document.querySelector("#shuffle");
     const showMarchingEl = document.querySelector("#showMarching");
     const showAdsEl = document.querySelector("#showAds");
+    const splitViewEl = document.querySelector("#splitView");
 
     const edgePairs = [
       [],
@@ -348,6 +353,7 @@
     let crossingSampleUniformBuffer;
     let adsContourUniformBuffer;
     let gridUniformBuffer;
+    let boundaryUniformBuffer;
     let segmentBuffer;
     let backgroundBindGroup;
     let marchingBindGroup;
@@ -359,6 +365,7 @@
     let crossingSampleBindGroup;
     let adsContourBindGroup;
     let gridBindGroup;
+    let boundaryBindGroup;
     let segmentCapacity = 0;
     let presentationFormat;
     let width = 1;
@@ -369,6 +376,7 @@
     let lastTime = performance.now();
     let pointer = { x: 0.5, y: 0.5, active: false };
     let blobs = [];
+    const BLOB_COUNT = 14;
     let scaffold = null;
     let scaffoldKey = "";
     let scaffoldDebugCache = null;
@@ -376,6 +384,7 @@
     const visible = {
       marching: true,
       ads: true,
+      split: true,
     };
 
     const shaderCode = `
@@ -384,6 +393,8 @@ struct Uniforms {
   thickness: f32,
   _pad: f32,
   color: vec4f,
+  clipRange: vec2f,
+  _pad2: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -420,6 +431,9 @@ fn vs(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instance
 
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4f {
+  if (in.position.x < uniforms.clipRange.x || in.position.x > uniforms.clipRange.y) {
+    discard;
+  }
   let core = 1.0 - smoothstep(0.72, 1.0, abs(in.local.y));
   let glow = 1.0 - smoothstep(0.95, 1.65, abs(in.local.y));
   let tint = mix(uniforms.color.rgb * 0.82, uniforms.color.rgb, core);
@@ -443,7 +457,7 @@ struct BackgroundUniforms {
 };
 
 @group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
-@group(0) @binding(1) var<storage, read> blobs: array<Blob, 7>;
+@group(0) @binding(1) var<storage, read> blobs: array<Blob, ${BLOB_COUNT}>;
 
 fn shapeMetric(blob: Blob, dx: f32, dy: f32) -> f32 {
   let canvasAspect = uniforms.resolution.x / uniforms.resolution.y;
@@ -487,7 +501,7 @@ fn sampleField(pixel: vec2f) -> f32 {
   let n = pixel / uniforms.resolution;
   var v = 0.0;
 
-  for (var i = 0u; i < 7u; i = i + 1u) {
+  for (var i = 0u; i < ${BLOB_COUNT}u; i = i + 1u) {
     let blob = blobs[i];
     let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
     let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
@@ -541,7 +555,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     }
 
     function buildBlobData() {
-      const data = new Float32Array(7 * 12);
+      const data = new Float32Array(BLOB_COUNT * 12);
       for (let i = 0; i < blobs.length; i++) {
         const blob = blobs[i];
         const offset = i * 12;
@@ -562,10 +576,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     function shuffleBlobs() {
       const shapes = ["circle", "square", "diamond", "block"];
-      blobs = Array.from({ length: 7 }, (_, i) => ({
+      blobs = Array.from({ length: BLOB_COUNT }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.14 + Math.random() * 0.16,
+        radius: 0.1 + Math.random() * 0.1,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
         drift: 0.05 + Math.random() * 0.12,
@@ -737,6 +751,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
     function syncToggles() {
       showMarchingEl.checked = visible.marching;
       showAdsEl.checked = visible.ads;
+      splitViewEl.checked = visible.split;
     }
 
     function poissonDiskPoints(radius) {
@@ -972,9 +987,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const base = ensureScaffoldBase();
       const iso = Number(isoEl.value);
       const epsilon = Number(cellEl.value) * dpr * 0.05;
-      const delta = Math.max(2.5 * dpr, epsilon * 0.18);
-      const maxIterations = 3;
-      const maxNewPointsPerIteration = 96;
+      const delta = Math.max(0.5 * dpr, epsilon * 0.18);
+      const maxIterations = 8;
+      const maxNewPointsPerIteration = 384;
       const seen = new Set();
       const points = base.points.map((p) => {
         seen.add(`${Math.round(p.x * 4)}:${Math.round(p.y * 4)}`);
@@ -1022,6 +1037,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
       delaunay = buildDelaunay(points);
       signs = classifyPoints(delaunay.points, t, iso);
+      longCrossingCount = 0;
+      for (const [aIndex, bIndex] of delaunay.edges) {
+        if (signs[aIndex] === signs[bIndex]) continue;
+        if (edgeLength(delaunay.points[aIndex], delaunay.points[bIndex]) > epsilon) {
+          longCrossingCount++;
+        }
+      }
       return { ...delaunay, signs, epsilon, delta, insertedCount, longCrossingCount };
     }
 
@@ -1195,6 +1217,13 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
           { binding: 1, resource: { buffer: segmentBuffer } },
         ],
       });
+      boundaryBindGroup = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: boundaryUniformBuffer } },
+          { binding: 1, resource: { buffer: segmentBuffer } },
+        ],
+      });
     }
 
     function render(now) {
@@ -1223,6 +1252,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         insertedCount: 0,
         longCrossingCount: 0,
       };
+      const boundarySegments = visible.split ? new Float32Array([width * 0.5, 0, width * 0.5, height]) : new Float32Array();
       const scaffoldOffset = gridSegments.length + segments.length;
       const crossingOffset = scaffoldOffset + scaffoldDebug.refinedDelaunaySegments.length;
       const insidePointOffset = crossingOffset + scaffoldDebug.crossingSegments.length;
@@ -1230,7 +1260,8 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       const insertedPointOffset = outsidePointOffset + scaffoldDebug.outsidePointSegments.length;
       const crossingSampleOffset = insertedPointOffset + scaffoldDebug.insertedPointSegments.length;
       const adsContourOffset = crossingSampleOffset + scaffoldDebug.crossingSampleSegments.length;
-      const combinedSegments = new Float32Array(adsContourOffset + scaffoldDebug.adsContourSegments.length);
+      const boundaryOffset = adsContourOffset + scaffoldDebug.adsContourSegments.length;
+      const combinedSegments = new Float32Array(boundaryOffset + boundarySegments.length);
       combinedSegments.set(gridSegments);
       combinedSegments.set(segments, gridSegments.length);
       combinedSegments.set(scaffoldDebug.refinedDelaunaySegments, scaffoldOffset);
@@ -1240,20 +1271,25 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       combinedSegments.set(scaffoldDebug.insertedPointSegments, insertedPointOffset);
       combinedSegments.set(scaffoldDebug.crossingSampleSegments, crossingSampleOffset);
       combinedSegments.set(scaffoldDebug.adsContourSegments, adsContourOffset);
+      combinedSegments.set(boundarySegments, boundaryOffset);
       ensureSegmentBuffer(Math.max(4, combinedSegments.length));
       if (combinedSegments.length > 0) {
         device.queue.writeBuffer(segmentBuffer, 0, combinedSegments);
       }
 
-      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16]);
-      const marchingUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
-      const scaffoldUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.05), 0, 0.56, 0.64, 0.72, 0.20]);
-      const crossingUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88]);
-      const insidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.30, 1.0, 0.62, 0.76]);
-      const outsidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.45, 0.58, 1.0, 0.70]);
-      const insertedPointUniformData = new Float32Array([width, height, Math.max(1.8, dpr * 2.0), 0, 1.0, 0.33, 0.64, 0.86]);
-      const crossingSampleUniformData = new Float32Array([width, height, Math.max(1.6, dpr * 1.8), 0, 0.97, 0.98, 0.88, 0.92]);
-      const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94]);
+      const fullClip = [0, width];
+      const marchingClip = visible.split ? [0, width * 0.5] : fullClip;
+      const adsClip = visible.split ? [width * 0.5, width] : fullClip;
+      const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.16, marchingClip[0], marchingClip[1], 0, 0]);
+      const marchingUniformData = new Float32Array([width, height, 3 * dpr, 0, 0.33, 1.0, 0.70, 0.95, marchingClip[0], marchingClip[1], 0, 0]);
+      const scaffoldUniformData = new Float32Array([width, height, Math.max(1, dpr * 1.05), 0, 0.56, 0.64, 0.72, 0.20, adsClip[0], adsClip[1], 0, 0]);
+      const crossingUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.7), 0, 1.0, 0.79, 0.30, 0.88, adsClip[0], adsClip[1], 0, 0]);
+      const insidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.30, 1.0, 0.62, 0.76, adsClip[0], adsClip[1], 0, 0]);
+      const outsidePointUniformData = new Float32Array([width, height, Math.max(1.25, dpr * 1.5), 0, 0.45, 0.58, 1.0, 0.70, adsClip[0], adsClip[1], 0, 0]);
+      const insertedPointUniformData = new Float32Array([width, height, Math.max(1.8, dpr * 2.0), 0, 1.0, 0.33, 0.64, 0.86, adsClip[0], adsClip[1], 0, 0]);
+      const crossingSampleUniformData = new Float32Array([width, height, Math.max(1.6, dpr * 1.8), 0, 0.97, 0.98, 0.88, 0.92, adsClip[0], adsClip[1], 0, 0]);
+      const adsContourUniformData = new Float32Array([width, height, Math.max(1.5, 3 * dpr * 0.88), 0, 1.0, 0.52, 0.30, 0.94, adsClip[0], adsClip[1], 0, 0]);
+      const boundaryUniformData = new Float32Array([width, height, Math.max(1, dpr * 2), 0, 0.92, 0.96, 1.0, 0.62, fullClip[0], fullClip[1], 0, 0]);
       const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(marchingUniformBuffer, 0, marchingUniformData);
@@ -1264,6 +1300,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       device.queue.writeBuffer(insertedPointUniformBuffer, 0, insertedPointUniformData);
       device.queue.writeBuffer(crossingSampleUniformBuffer, 0, crossingSampleUniformData);
       device.queue.writeBuffer(adsContourUniformBuffer, 0, adsContourUniformData);
+      device.queue.writeBuffer(boundaryUniformBuffer, 0, boundaryUniformData);
       device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
       device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
 
@@ -1304,12 +1341,16 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         pass.setBindGroup(0, adsContourBindGroup);
         pass.draw(6, scaffoldDebug.adsContourSegments.length / 4, 0, adsContourOffset / 4);
       }
+      if (visible.split) {
+        pass.setBindGroup(0, boundaryBindGroup);
+        pass.draw(6, boundarySegments.length / 4, 0, boundaryOffset / 4);
+      }
       pass.end();
       device.queue.submit([encoder.finish()]);
 
       const marchingLabel = visible.marching ? `${segments.length / 4 | 0} mc` : "mc off";
       const adsLabel = visible.ads
-        ? `${scaffoldDebug.edgeCount | 0} refined edges / ${scaffoldDebug.contourCount | 0} ads`
+        ? `${scaffoldDebug.edgeCount | 0} edges / ${scaffoldDebug.contourCount | 0} ads / ${scaffoldDebug.longCrossingCount | 0} long`
         : "ads off";
       statusEl.textContent = `${marchingLabel} / ${adsLabel}`;
       requestAnimationFrame(render);
@@ -1349,43 +1390,47 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       blobBuffer = device.createBuffer({
-        size: 7 * 12 * Float32Array.BYTES_PER_ELEMENT,
+        size: BLOB_COUNT * 12 * Float32Array.BYTES_PER_ELEMENT,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
       gridUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       marchingUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       scaffoldUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       crossingUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       insidePointUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       outsidePointUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       insertedPointUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       crossingSampleUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
       adsContourUniformBuffer = device.createBuffer({
-        size: 32,
+        size: 48,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      boundaryUniformBuffer = device.createBuffer({
+        size: 48,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
 
@@ -1462,6 +1507,10 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       visible.ads = showAdsEl.checked;
     });
 
+    splitViewEl.addEventListener("change", () => {
+      visible.split = splitViewEl.checked;
+    });
+
     pauseButton.addEventListener("click", () => {
       paused = !paused;
       pauseButton.textContent = paused ? "Resume" : "Pause";
@@ -1477,6 +1526,7 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLButtonElement) return;
       if (event.key === "1") visible.marching = !visible.marching;
       if (event.key === "2") visible.ads = !visible.ads;
+      if (event.key === "3") visible.split = !visible.split;
       if (event.key === " ") {
         paused = !paused;
         pauseButton.textContent = paused ? "Resume" : "Pause";
