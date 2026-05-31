@@ -253,17 +253,17 @@
       <label>
         <span class="label-row">
           <span>Iso value</span>
-          <output id="isoOut">0.80</output>
+          <output id="isoOut">0.42</output>
         </span>
-        <input id="iso" type="range" min="0.25" max="1.8" step="0.01" value="0.80" />
+        <input id="iso" type="range" min="0.08" max="1.2" step="0.01" value="0.42" />
       </label>
 
       <label>
         <span class="label-row">
           <span>Cell size</span>
-          <output id="cellOut">18 px</output>
+          <output id="cellOut">22 px</output>
         </span>
-        <input id="cell" type="range" min="8" max="42" step="1" value="18" />
+        <input id="cell" type="range" min="8" max="48" step="1" value="22" />
       </label>
 
       <label>
@@ -277,9 +277,9 @@
       <label>
         <span class="label-row">
           <span>Edge samples</span>
-          <output id="samplesOut">8</output>
+          <output id="samplesOut">12</output>
         </span>
-        <input id="samples" type="range" min="1" max="32" step="1" value="8" />
+        <input id="samples" type="range" min="1" max="32" step="1" value="12" />
       </label>
 
       <div class="button-row">
@@ -328,10 +328,14 @@
     let device;
     let context;
     let pipeline;
+    let backgroundPipeline;
+    let backgroundUniformBuffer;
+    let sourceBuffer;
     let classicUniformBuffer;
     let subgridUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
+    let backgroundBindGroup;
     let classicBindGroup;
     let subgridBindGroup;
     let gridBindGroup;
@@ -398,6 +402,102 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
   return vec4f(tint, uniforms.color.a * max(core, glow * 0.45));
 }`;
 
+    const backgroundShaderCode = `
+struct Source {
+  a: vec4f,
+  b: vec4f,
+  c: vec4f,
+};
+
+struct BackgroundUniforms {
+  resolution: vec2f,
+  iso: f32,
+  phase: f32,
+  pointer: vec2f,
+  pointerActive: f32,
+  _pad: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
+@group(0) @binding(1) var<storage, read> sources: array<Source, 7>;
+
+fn shapeMetric(source: Source, dx: f32, dy: f32) -> f32 {
+  let canvasAspect = uniforms.resolution.x / uniforms.resolution.y;
+  let sx = dx * canvasAspect;
+  let sy = dy;
+  let radius = source.a.z;
+  let speed = source.a.w;
+  let angle = source.b.x;
+  let rotation = source.b.z;
+  let aspect = source.b.w;
+  let shape = source.c.x;
+  let turn = rotation + sin(uniforms.phase * speed * 0.7 + angle) * 0.45;
+  let c = cos(turn);
+  let s = sin(turn);
+  let rx = (sx * c - sy * s) / radius;
+  let ry = (sx * s + sy * c) / (radius * aspect);
+  let ax = abs(rx);
+  let ay = abs(ry);
+
+  if (shape < 0.5) {
+    return length(vec2f(rx, ry));
+  }
+  if (shape < 1.5) {
+    return max(ax, ay);
+  }
+  if (shape < 2.5) {
+    return ax + ay;
+  }
+  return max(ax / 1.45, ay / 0.58);
+}
+
+fn sampleField(pixel: vec2f) -> f32 {
+  let n = pixel / uniforms.resolution;
+  var v = 0.0;
+
+  for (var i = 0u; i < 7u; i = i + 1u) {
+    let source = sources[i];
+    let bx = source.a.x + cos(uniforms.phase * source.a.w + source.b.x) * source.b.y;
+    let by = source.a.y + sin(uniforms.phase * source.a.w * 0.83 + source.b.x * 1.7) * source.b.y;
+    let metric = shapeMetric(source, n.x - bx, n.y - by);
+    let wallWidth = source.c.z;
+    let wallDistance = abs(metric - 1.0);
+    let wall = exp(-(wallDistance * wallDistance) / (2.0 * wallWidth * wallWidth));
+    v = v + source.c.y * wall;
+  }
+
+  if (uniforms.pointerActive > 0.5) {
+    let dx = n.x - uniforms.pointer.x;
+    let dy = n.y - uniforms.pointer.y;
+    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
+    let pointerCore = max(0.0, 1.0 - pointerMetric);
+    v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+  }
+
+  let ripple = sin(n.x * 11.0 + uniforms.phase * 0.35) * cos(n.y * 9.0 - uniforms.phase * 0.3) * 0.012;
+  return v + ripple;
+}
+
+@vertex
+fn bgVs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
+  let p = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0)
+  )[vertexIndex];
+  return vec4f(p, 0.0, 1.0);
+}
+
+@fragment
+fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let field = sampleField(position.xy);
+  let band = 1.0 - smoothstep(0.0, 0.11, abs(field - uniforms.iso));
+  if (field > uniforms.iso) {
+    return vec4f(0.11, 0.50, 0.38, 0.44 + band * 0.18);
+  }
+  return vec4f(0.20, 0.22, 0.32, 0.18 + band * 0.10);
+}`;
+
     function updateOutputs() {
       isoOut.value = Number(isoEl.value).toFixed(2);
       cellOut.value = `${cellEl.value} px`;
@@ -410,19 +510,47 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       showSubgridEl.checked = visible.subgrid;
     }
 
+    function shapeId(shape) {
+      if (shape === "square") return 1;
+      if (shape === "diamond") return 2;
+      if (shape === "block") return 3;
+      return 0;
+    }
+
+    function buildSourceData() {
+      const data = new Float32Array(7 * 12);
+      for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
+        const offset = i * 12;
+        data[offset] = source.x;
+        data[offset + 1] = source.y;
+        data[offset + 2] = source.radius;
+        data[offset + 3] = source.speed;
+        data[offset + 4] = source.angle;
+        data[offset + 5] = source.drift;
+        data[offset + 6] = source.rotation;
+        data[offset + 7] = source.aspect;
+        data[offset + 8] = shapeId(source.shape);
+        data[offset + 9] = source.weight;
+        data[offset + 10] = source.wallWidth;
+      }
+      return data;
+    }
+
     function shuffleSources() {
       const shapes = ["circle", "square", "diamond", "block"];
       sources = Array.from({ length: 7 }, (_, i) => ({
         x: Math.random(),
         y: Math.random(),
-        radius: 0.12 + Math.random() * 0.12,
+        radius: 0.14 + Math.random() * 0.16,
         speed: 0.35 + Math.random() * 0.85,
         angle: Math.random() * Math.PI * 2,
-        drift: 0.08 + Math.random() * 0.16,
+        drift: 0.05 + Math.random() * 0.12,
         rotation: Math.random() * Math.PI,
         aspect: 0.65 + Math.random() * 0.9,
         shape: shapes[i % shapes.length],
-        weight: i % 3 === 0 ? 1.35 : 1.0,
+        weight: i % 3 === 0 ? 0.95 : 0.78,
+        wallWidth: 0.035 + Math.random() * 0.035,
       }));
     }
 
@@ -464,8 +592,9 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         const bx = source.x + Math.cos(t * source.speed + source.angle) * source.drift;
         const by = source.y + Math.sin(t * source.speed * 0.83 + source.angle * 1.7) * source.drift;
         const metric = shapeMetric(source, nx - bx, ny - by, t);
-        const core = Math.max(0, 1 - metric);
-        v += source.weight * (1 / (metric * metric + 0.22) + core * core * 1.6);
+        const wallDistance = Math.abs(metric - 1);
+        const wall = Math.exp(-(wallDistance * wallDistance) / (2 * source.wallWidth * source.wallWidth));
+        v += source.weight * wall;
       }
 
       if (pointer.active) {
@@ -476,8 +605,8 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         v += 0.85 * (1 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
       }
 
-      const ripple = Math.sin(nx * 20 + t * 0.8) * Math.cos(ny * 16 - t * 0.7) * 0.045;
-      return v * 0.18 + ripple;
+      const ripple = Math.sin(nx * 11 + t * 0.35) * Math.cos(ny * 9 - t * 0.3) * 0.012;
+      return v + ripple;
     }
 
     function interpolate(p0, p1, v0, v1, iso) {
@@ -736,9 +865,12 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       const gridUniformData = new Float32Array([width, height, Math.max(1, dpr), 0, 0.55, 0.68, 0.78, 0.13]);
       const classicUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.66]);
       const subgridUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.72]);
+      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(classicUniformBuffer, 0, classicUniformData);
       device.queue.writeBuffer(subgridUniformBuffer, 0, subgridUniformData);
+      device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
+      device.queue.writeBuffer(sourceBuffer, 0, buildSourceData());
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
@@ -749,6 +881,9 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
           storeOp: "store",
         }],
       });
+      pass.setPipeline(backgroundPipeline);
+      pass.setBindGroup(0, backgroundBindGroup);
+      pass.draw(3);
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, gridBindGroup);
       pass.draw(6, gridSegments.length / 4);
@@ -798,6 +933,14 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         alphaMode: "opaque",
       });
 
+      backgroundUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      sourceBuffer = device.createBuffer({
+        size: 7 * 12 * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
       gridUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -812,6 +955,7 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       });
 
       const shaderModule = device.createShaderModule({ code: shaderCode });
+      const backgroundShaderModule = device.createShaderModule({ code: backgroundShaderCode });
       pipeline = device.createRenderPipeline({
         layout: "auto",
         vertex: {
@@ -832,6 +976,34 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         primitive: {
           topology: "triangle-list",
         },
+      });
+      backgroundPipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: backgroundShaderModule,
+          entryPoint: "bgVs",
+        },
+        fragment: {
+          module: backgroundShaderModule,
+          entryPoint: "bgFs",
+          targets: [{
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+      backgroundBindGroup = device.createBindGroup({
+        layout: backgroundPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: backgroundUniformBuffer } },
+          { binding: 1, resource: { buffer: sourceBuffer } },
+        ],
       });
 
       ensureSegmentBuffer(1024);
