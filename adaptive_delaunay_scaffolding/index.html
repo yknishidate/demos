@@ -52,37 +52,6 @@
       backdrop-filter: blur(16px);
     }
 
-    .compact-toggle-button {
-      position: absolute;
-      inset: auto 8px 6px auto;
-      display: grid;
-      place-items: center;
-      width: 18px;
-      height: 18px;
-      padding: 0;
-      border: 0;
-      border-radius: 4px;
-      background: transparent;
-      color: rgba(170, 180, 192, 0.78);
-      font-size: 13px;
-      line-height: 1;
-    }
-
-    .compact-toggle-button svg {
-      width: 14px;
-      height: 14px;
-      transition: transform 140ms ease;
-    }
-
-    .hud.collapsed .compact-toggle-button svg {
-      transform: rotate(180deg);
-    }
-
-    .compact-toggle-button:hover {
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.07);
-    }
-
     .title-row {
       display: flex;
       align-items: center;
@@ -242,25 +211,6 @@
       color: var(--danger);
     }
 
-    .hud.collapsed {
-      width: min(260px, calc(100vw - 36px));
-    }
-
-    .hud.collapsed .title-row,
-    .hud.collapsed .controls > label:not(.toggle),
-    .hud.collapsed .button-row,
-    .hud.collapsed .note {
-      display: none;
-    }
-
-    .hud.collapsed .controls {
-      gap: 0;
-    }
-
-    .hud.collapsed .toggle-row {
-      margin-top: 0;
-    }
-
     @media (max-width: 640px) {
       .hud {
         inset: auto 12px 12px 12px;
@@ -300,6 +250,7 @@
       }
     }
   </style>
+  <link rel="stylesheet" href="../shared/demo-ui.css" />
 </head>
 <body>
   <canvas id="canvas"></canvas>
@@ -363,6 +314,8 @@
   </section>
 
   <script type="module">
+    import { setupCompactUi } from "../shared/demo-ui.js";
+
     const canvas = document.querySelector("#canvas");
     const hudEl = document.querySelector("#hud");
     const statusEl = document.querySelector("#status");
@@ -445,7 +398,7 @@
       ads: true,
       split: true,
     };
-    let compactUi = false;
+    setupCompactUi({ hud: hudEl, button: compactUiEl });
 
     const shaderCode = `
 struct Uniforms {
@@ -812,9 +765,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
       showMarchingEl.checked = visible.marching;
       showAdsEl.checked = visible.ads;
       splitViewEl.checked = visible.split;
-      compactUiEl.setAttribute("aria-label", compactUi ? "Expand controls" : "Collapse controls");
-      compactUiEl.title = compactUi ? "Expand controls" : "Collapse controls";
-      hudEl.classList.toggle("collapsed", compactUi);
     }
 
     function poissonDiskPoints(radius) {
@@ -1573,11 +1523,6 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
 
     splitViewEl.addEventListener("change", () => {
       visible.split = splitViewEl.checked;
-    });
-
-    compactUiEl.addEventListener("click", () => {
-      compactUi = !compactUi;
-      syncToggles();
     });
 
     pauseButton.addEventListener("click", () => {
