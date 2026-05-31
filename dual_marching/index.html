@@ -43,8 +43,8 @@
     .hud {
       position: fixed;
       inset: 18px auto auto 18px;
-      width: min(360px, calc(100vw - 36px));
-      padding: 16px;
+      width: min(330px, calc(100vw - 36px));
+      padding: 12px;
       border: 1px solid var(--panel-border);
       border-radius: 8px;
       background: var(--panel);
@@ -57,12 +57,12 @@
       align-items: center;
       justify-content: space-between;
       gap: 14px;
-      margin-bottom: 14px;
+      margin-bottom: 10px;
     }
 
     h1 {
       margin: 0;
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1.2;
       font-weight: 700;
       letter-spacing: 0;
@@ -71,21 +71,21 @@
     .status {
       min-width: 172px;
       color: var(--accent);
-      font-size: 12px;
+      font-size: 11px;
       text-align: right;
       white-space: nowrap;
     }
 
     .controls {
       display: grid;
-      gap: 12px;
+      gap: 9px;
     }
 
     label {
       display: grid;
-      gap: 7px;
+      gap: 5px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .label-row {
@@ -108,18 +108,18 @@
     .button-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 10px;
+      gap: 8px;
       margin-top: 2px;
     }
 
     button {
-      height: 36px;
+      height: 32px;
       border: 1px solid rgba(255, 255, 255, 0.14);
       border-radius: 7px;
       background: rgba(255, 255, 255, 0.07);
       color: var(--text);
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       cursor: pointer;
     }
 
@@ -131,7 +131,7 @@
     .toggle-row {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 8px;
+      gap: 6px;
       margin-top: 2px;
     }
 
@@ -139,22 +139,22 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      min-height: 30px;
+      gap: 10px;
+      min-height: 26px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
     }
 
     .toggle-name {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       min-width: 0;
     }
 
     .swatch {
-      width: 11px;
-      height: 11px;
+      width: 10px;
+      height: 10px;
       flex: 0 0 auto;
       border-radius: 3px;
     }
@@ -182,9 +182,9 @@
     }
 
     .note {
-      margin: 12px 0 0;
+      margin: 9px 0 0;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 11px;
       line-height: 1.45;
     }
 
@@ -192,9 +192,9 @@
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      margin-top: 8px;
+      margin-top: 6px;
       color: rgba(170, 180, 192, 0.78);
-      font-size: 12px;
+      font-size: 11px;
       text-decoration: none;
     }
 
@@ -356,11 +356,15 @@
     let device;
     let context;
     let pipeline;
+    let backgroundPipeline;
+    let backgroundUniformBuffer;
+    let blobBuffer;
     let contourUniformBuffer;
     let dualUniformBuffer;
     let dualMarchingUniformBuffer;
     let gridUniformBuffer;
     let segmentBuffer;
+    let backgroundBindGroup;
     let contourBindGroup;
     let dualBindGroup;
     let dualMarchingBindGroup;
@@ -429,6 +433,100 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
   return vec4f(tint, uniforms.color.a * max(core, glow * 0.45));
 }`;
 
+    const backgroundShaderCode = `
+struct Blob {
+  a: vec4f,
+  b: vec4f,
+  c: vec4f,
+};
+
+struct BackgroundUniforms {
+  resolution: vec2f,
+  iso: f32,
+  phase: f32,
+  pointer: vec2f,
+  pointerActive: f32,
+  _pad: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: BackgroundUniforms;
+@group(0) @binding(1) var<storage, read> blobs: array<Blob, 7>;
+
+fn shapeMetric(blob: Blob, dx: f32, dy: f32) -> f32 {
+  let canvasAspect = uniforms.resolution.x / uniforms.resolution.y;
+  let sx = dx * canvasAspect;
+  let sy = dy;
+  let radius = blob.a.z;
+  let speed = blob.a.w;
+  let angle = blob.b.x;
+  let rotation = blob.b.z;
+  let aspect = blob.b.w;
+  let shape = blob.c.x;
+  let turn = rotation + sin(uniforms.phase * speed * 0.7 + angle) * 0.45;
+  let c = cos(turn);
+  let s = sin(turn);
+  let rx = (sx * c - sy * s) / radius;
+  let ry = (sx * s + sy * c) / (radius * aspect);
+  let ax = abs(rx);
+  let ay = abs(ry);
+
+  if (shape < 0.5) {
+    return length(vec2f(rx, ry));
+  }
+  if (shape < 1.5) {
+    return max(ax, ay);
+  }
+  if (shape < 2.5) {
+    return ax + ay;
+  }
+  return max(ax / 1.45, ay / 0.58);
+}
+
+fn sampleField(pixel: vec2f) -> f32 {
+  let n = pixel / uniforms.resolution;
+  var v = 0.0;
+
+  for (var i = 0u; i < 7u; i = i + 1u) {
+    let blob = blobs[i];
+    let bx = blob.a.x + cos(uniforms.phase * blob.a.w + blob.b.x) * blob.b.y;
+    let by = blob.a.y + sin(uniforms.phase * blob.a.w * 0.83 + blob.b.x * 1.7) * blob.b.y;
+    let metric = shapeMetric(blob, n.x - bx, n.y - by);
+    let core = max(0.0, 1.0 - metric);
+    v = v + blob.c.y * (1.0 / (metric * metric + 0.22) + core * core * 1.6);
+  }
+
+  if (uniforms.pointerActive > 0.5) {
+    let dx = n.x - uniforms.pointer.x;
+    let dy = n.y - uniforms.pointer.y;
+    let pointerMetric = max(abs(dx) * (uniforms.resolution.x / uniforms.resolution.y), abs(dy)) / 0.16;
+    let pointerCore = max(0.0, 1.0 - pointerMetric);
+    v = v + 0.85 * (1.0 / (pointerMetric * pointerMetric + 0.2) + pointerCore * pointerCore * 1.8);
+  }
+
+  let ripple = sin(n.x * 20.0 + uniforms.phase * 0.8) * cos(n.y * 16.0 - uniforms.phase * 0.7) * 0.045;
+  return v * 0.18 + ripple;
+}
+
+@vertex
+fn bgVs(@builtin(vertex_index) vertexIndex: u32) -> @builtin(position) vec4f {
+  let p = array<vec2f, 3>(
+    vec2f(-1.0, -1.0),
+    vec2f(3.0, -1.0),
+    vec2f(-1.0, 3.0)
+  )[vertexIndex];
+  return vec4f(p, 0.0, 1.0);
+}
+
+@fragment
+fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let field = sampleField(position.xy);
+  let band = 1.0 - smoothstep(0.0, 0.11, abs(field - uniforms.iso));
+  if (field > uniforms.iso) {
+    return vec4f(0.11, 0.50, 0.38, 0.34 + band * 0.14);
+  }
+  return vec4f(0.20, 0.22, 0.32, 0.18 + band * 0.10);
+}`;
+
     function updateOutputs() {
       isoOut.value = Number(isoEl.value).toFixed(2);
       cellOut.value = `${cellEl.value} px`;
@@ -439,6 +537,32 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       showMarchingEl.checked = visible.marching;
       showContouringEl.checked = visible.contouring;
       showDualMarchingEl.checked = visible.dualMarching;
+    }
+
+    function shapeId(shape) {
+      if (shape === "square") return 1;
+      if (shape === "diamond") return 2;
+      if (shape === "block") return 3;
+      return 0;
+    }
+
+    function buildBlobData() {
+      const data = new Float32Array(7 * 12);
+      for (let i = 0; i < blobs.length; i++) {
+        const blob = blobs[i];
+        const offset = i * 12;
+        data[offset] = blob.x;
+        data[offset + 1] = blob.y;
+        data[offset + 2] = blob.radius;
+        data[offset + 3] = blob.speed;
+        data[offset + 4] = blob.angle;
+        data[offset + 5] = blob.drift;
+        data[offset + 6] = blob.rotation;
+        data[offset + 7] = blob.aspect;
+        data[offset + 8] = shapeId(blob.shape);
+        data[offset + 9] = blob.weight;
+      }
+      return data;
     }
 
     function shuffleBlobs() {
@@ -854,10 +978,13 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       const contourUniformData = new Float32Array([width, height, Number(widthEl.value) * dpr, 0, 0.33, 1.0, 0.70, 0.95]);
       const dualUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.72), 0, 1.0, 0.78, 0.26, 0.9]);
       const dualMarchingUniformData = new Float32Array([width, height, Math.max(1, Number(widthEl.value) * dpr * 0.56), 0, 0.72, 0.62, 1.0, 0.9]);
+      const backgroundUniformData = new Float32Array([width, height, Number(isoEl.value), phase, pointer.x, pointer.y, pointer.active ? 1 : 0, 0]);
       device.queue.writeBuffer(gridUniformBuffer, 0, gridUniformData);
       device.queue.writeBuffer(contourUniformBuffer, 0, contourUniformData);
       device.queue.writeBuffer(dualUniformBuffer, 0, dualUniformData);
       device.queue.writeBuffer(dualMarchingUniformBuffer, 0, dualMarchingUniformData);
+      device.queue.writeBuffer(backgroundUniformBuffer, 0, backgroundUniformData);
+      device.queue.writeBuffer(blobBuffer, 0, buildBlobData());
 
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
@@ -868,6 +995,9 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
           storeOp: "store",
         }],
       });
+      pass.setPipeline(backgroundPipeline);
+      pass.setBindGroup(0, backgroundBindGroup);
+      pass.draw(3);
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, gridBindGroup);
       pass.draw(6, gridSegments.length / 4);
@@ -922,6 +1052,14 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         alphaMode: "opaque",
       });
 
+      backgroundUniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      });
+      blobBuffer = device.createBuffer({
+        size: 7 * 12 * Float32Array.BYTES_PER_ELEMENT,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+      });
       gridUniformBuffer = device.createBuffer({
         size: 32,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -940,6 +1078,7 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
       });
 
       const shaderModule = device.createShaderModule({ code: shaderCode });
+      const backgroundShaderModule = device.createShaderModule({ code: backgroundShaderCode });
       pipeline = device.createRenderPipeline({
         layout: "auto",
         vertex: {
@@ -960,6 +1099,34 @@ fn fs(in: VertexOut) -> @location(0) vec4f {
         primitive: {
           topology: "triangle-list",
         },
+      });
+      backgroundPipeline = device.createRenderPipeline({
+        layout: "auto",
+        vertex: {
+          module: backgroundShaderModule,
+          entryPoint: "bgVs",
+        },
+        fragment: {
+          module: backgroundShaderModule,
+          entryPoint: "bgFs",
+          targets: [{
+            format: presentationFormat,
+            blend: {
+              color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+            },
+          }],
+        },
+        primitive: {
+          topology: "triangle-list",
+        },
+      });
+      backgroundBindGroup = device.createBindGroup({
+        layout: backgroundPipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: { buffer: backgroundUniformBuffer } },
+          { binding: 1, resource: { buffer: blobBuffer } },
+        ],
       });
 
       ensureSegmentBuffer(1024);
