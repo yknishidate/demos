@@ -512,9 +512,9 @@ fn bgFs(@builtin(position) position: vec4f) -> @location(0) vec4f {
   let field = sampleField(position.xy);
   let band = 1.0 - smoothstep(0.0, 0.11, abs(field - uniforms.iso));
   if (field > uniforms.iso) {
-    return vec4f(0.11, 0.50, 0.38, 0.34 + band * 0.14);
+    return vec4f(0.11, 0.50, 0.38, 0.51 + band * 0.21);
   }
-  return vec4f(0.20, 0.22, 0.32, 0.18 + band * 0.10);
+  return vec4f(0.20, 0.22, 0.32, 0.27 + band * 0.15);
 }`;
 
     function updateOutputs() {
